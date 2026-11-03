@@ -42,6 +42,8 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 ## Proposed, awaiting approval
 
 - Save strategy: resolve symlinks at open and use the resolved URL as the NSDocument `fileURL`; NSDocument safe save; in-place write when the file has more than one hard link (Spike 2).
+- Remote images blocked by default, with a per-window "Load remote images" bar (Spike 6, open question 1).
+- Local file access root: the git repository root when the document is inside one, otherwise the document's folder; serve the page at the document's matching path so `../` resolves as on disk (Spike 6, open question 2).
 - Compare text by UTF-8 bytes, never `String ==`, which treats canonically equivalent text as equal (Spike 2).
 
 ## Spike results
@@ -53,4 +55,4 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 | 3 Rendered edit to patch | | | |
 | 4 Caret stability | | | |
 | 5 IME and undo | | | |
-| 6 Preview security | | | |
+| 6 Preview security | Pass: in-tree images load; traversal, symlink escapes, non-images and remote images blocked; no document script ran; links go to the browser. See `spikes/spike6-security/REPORT.md` | None needed. Scheme `marklight-preview://doc/`; DOMPurify + strict CSP + page JS off, with Marklight JS in an isolated content world | 2026-11-03 |
