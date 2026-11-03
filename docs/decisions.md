@@ -35,12 +35,18 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 - Get a Developer ID before 1.0 if possible.
 - Homebrew: check current cask policy; personal tap as fallback.
 
+## Proposed, awaiting approval
+
+- `Patch` and `data-src` range unit: UTF-16 code units into the decoded text (Spike 1). Both panes produce UTF-16 offsets natively; only the parser adapter converts from swift-markdown's UTF-8 columns. Shared contract, so it needs Coordinator approval (`AGENTS.md` section 3).
+- Save strategy: resolve symlinks at open and use the resolved URL as the NSDocument `fileURL`; NSDocument safe save; in-place write when the file has more than one hard link (Spike 2).
+- Compare text by UTF-8 bytes, never `String ==`, which treats canonically equivalent text as equal (Spike 2).
+
 ## Spike results
 
 | Spike | Result | Fallback taken | Date |
 |---|---|---|---|
-| 1 Source ranges | | | |
-| 2 Zero-diff I/O | | | |
+| 1 Source ranges | Partial pass. Columns are UTF-8 byte offsets. Block ranges reliable; about 1.5% of inline ranges in real files are wrong for 6 known cmark-gfm reasons. See `spikes/spike1-ranges/REPORT.md` | Keep swift-markdown; add an inline re-anchoring pass in `Parser.swift`; always parse with `.disableSmartOpts` | 2026-11-03 |
+| 2 Zero-diff I/O | Pass: 21/21 files byte-identical; mode, xattrs and symlinks kept. See `spikes/spike2-io/REPORT.md` | None needed. Escaped-UTF-8 decode for invalid bytes; raw bytes kept as read-only fallback | 2026-11-03 |
 | 3 Rendered edit to patch | | | |
 | 4 Caret stability | | | |
 | 5 IME and undo | | | |
