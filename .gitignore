@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved.bak
+/Packages
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+*.moved-aside
+build/
+
+# Spike scratch output
+spikes/**/out/
