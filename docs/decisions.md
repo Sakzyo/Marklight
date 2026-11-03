@@ -35,9 +35,12 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 - Get a Developer ID before 1.0 if possible.
 - Homebrew: check current cask policy; personal tap as fallback.
 
+## Contracts
+
+- 2026-11-03, approved by the owner: `Patch` and `data-src` ranges are UTF-16 code units into the decoded text (Spike 1). Both panes produce UTF-16 offsets natively; only the parser adapter converts from swift-markdown's UTF-8 columns. Written down in `docs/contracts.md`.
+
 ## Proposed, awaiting approval
 
-- `Patch` and `data-src` range unit: UTF-16 code units into the decoded text (Spike 1). Both panes produce UTF-16 offsets natively; only the parser adapter converts from swift-markdown's UTF-8 columns. Shared contract, so it needs Coordinator approval (`AGENTS.md` section 3).
 - Save strategy: resolve symlinks at open and use the resolved URL as the NSDocument `fileURL`; NSDocument safe save; in-place write when the file has more than one hard link (Spike 2).
 - Compare text by UTF-8 bytes, never `String ==`, which treats canonically equivalent text as equal (Spike 2).
 

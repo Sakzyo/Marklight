@@ -29,7 +29,7 @@ A single agent may hold several roles in small phases. It still follows each rol
 
 These are the interfaces agents depend on. Changing any of them needs the Coordinator's approval and a note in `docs/decisions.md`.
 
-- **`Patch`**: `Patch(range, replacement, origin)`, where `range` is expressed in a single agreed unit (decide once, in Spike 1: UTF-8 byte offsets or characters) and `origin` identifies the pane.
+- **`Patch`**: `Patch(range, replacement, origin)`, where `range` is in UTF-16 code units into the decoded text (decided after Spike 1; see `docs/contracts.md`) and `origin` identifies the pane.
 - **`Buffer` API**: apply a patch, read text and slices, undo and redo, subscribe to changes. Panes only ever talk to the buffer through this API.
 - **Render output contract**: every rendered element carries `data-src="start:end"` in the agreed unit.
 - **Bridge messages**: the JS-to-Swift message types and fields, documented in `docs/bridge.md` once Spike 3 settles them. Keep the surface minimal.
