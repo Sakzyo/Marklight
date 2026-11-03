@@ -1,0 +1,3 @@
+# Fixtures are byte-exact test data: never normalize line endings or encodings.
+Tests/Fixtures/** -text
+spikes/**/fixtures/** -text
