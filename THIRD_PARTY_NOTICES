@@ -1,0 +1,22 @@
+Marklight includes or depends on the following third-party software.
+
+================================================================================
+swift-markdown
+https://github.com/swiftlang/swift-markdown
+License: Apache License 2.0
+
+Copyright (c) Apple Inc. and the Swift project authors.
+Licensed under the Apache License, Version 2.0. You may obtain a copy of the
+License at https://www.apache.org/licenses/LICENSE-2.0. The package's NOTICE
+file must be preserved in distributions.
+
+swift-markdown bundles swift-cmark (cmark-gfm), which is licensed under the
+BSD 2-Clause License and others; see that package's COPYING file.
+
+================================================================================
+To add before the preview ships (bundled offline JS, each with its own license):
+  - Mermaid
+  - KaTeX
+  - highlight.js
+  - DOMPurify
+And Sparkle, when updates are added.
