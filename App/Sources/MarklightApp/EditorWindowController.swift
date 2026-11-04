@@ -29,6 +29,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     private var followingPreview = false
     private var pendingReveal: DispatchWorkItem?
     private var selectionObserver: NSObjectProtocol?
+    private var bufferObserver: UUID?
     /// The selection and text version at the last selection change, to tell a
     /// caret move from an edit that carried the caret along.
     private var lastSelection = NSRange(location: 0, length: 0)
@@ -59,6 +60,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
                                                                    queue: nil) { [weak self] _ in self?.sourceSelectionChanged() }
         lastSelection = editor.textView.selectedRange()
         lastSelectionVersion = buffer.version
+        // An edit that leaves the caret alone posts no selection change, and the
+        // next real move mustn't be mistaken for it. An edit's own change arrives
+        // in the same run loop turn, so anything later is a move of its own.
+        bufferObserver = buffer.addObserver { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.lastSelectionVersion = self.buffer.version
+            }
+        }
         editor.historyMoved = { [weak self] selection in
             guard let self, self.layout == .split else { return }
             self.preview?.reveal(selection.lowerBound)
@@ -70,6 +80,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     deinit {
         if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
+        if let bufferObserver { buffer.removeObserver(bufferObserver) }
     }
 
     override func showWindow(_ sender: Any?) {

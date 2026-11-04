@@ -111,10 +111,23 @@ extension PreviewSuites {
             defer { h.close() }
             try await h.settle()
             try h.doc.buffer.apply(Patch(range: 6..<6, replacement: Array(paragraphs.utf16), origin: .command))
-            h.textView.setSelectedRange(NSRange(location: offset(of: "Paragraph number 150 ", in: h), length: 0))
-            await pump(for: 0.3)
+            #expect(!h.pane.updater.isCurrent, "the page has to be behind for this to mean anything")
+            h.pane.reveal(offset(of: "Paragraph number 150 ", in: h))
             try await h.settle()
             await pump(for: 0.1)
+            #expect(try await showing(h, 150))
+        }
+
+        @Test("A caret move still scrolls after an edit that left the caret alone")
+        func moveAfterUnrelatedEdit() async throws {
+            let h = try PreviewHarness(text: paragraphs, size: NSSize(width: 1000, height: 500))
+            defer { h.close() }
+            try await h.settle()
+            let end = h.doc.buffer.units.count
+            try h.doc.buffer.apply(Patch(range: end..<end, replacement: Array("New text at the end.\n".utf16), origin: .command))
+            try await h.settle()
+            h.textView.setSelectedRange(NSRange(location: offset(of: "Paragraph number 150 ", in: h), length: 0))
+            await pump(for: 0.2)
             #expect(try await showing(h, 150))
         }
 
