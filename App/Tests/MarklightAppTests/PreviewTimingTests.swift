@@ -163,8 +163,12 @@ struct PreviewTimingTests {
             let r = try await renderedBurst(bytes: bytes)
             print(String(format: "Rendered %d KB, 180 keys: p95 %.2f ms, native key to DOM p95 %.2f ms, JS patch p95 %.2f ms, main late max %.2f ms",
                          bytes / 1000, r.p95, r.nativeP95, r.patchP95, r.late))
-            if bytes == 100_000 { #expect(r.p95 < 20) }
-            if bytes == 850_000 { #expect(r.p95 < 50) }
+            let limits: [Int: Double] = [100_000: 20, 850_000: 50]
+            if let limit = limits[bytes] {
+                #expect(r.p95 < limit, "beforeinput to DOM at \(bytes) bytes")
+                // WebKit can queue native keys before the page sees beforeinput.
+                #expect(r.nativeP95 < limit, "native dispatch to DOM at \(bytes) bytes")
+            }
         }
         let slow = try await renderedBurst(bytes: 4_000, count: 16, controlDelayMS: 65)
         print(String(format: "Delayed-patch control p95 %.2f ms", slow.p95))
