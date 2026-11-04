@@ -286,7 +286,9 @@
   }
 
   document.addEventListener('selectionchange', () => {
-    if (!composing && document.activeElement === root) remembered = selection() || remembered;
+    // WebKit leaves activeElement at the editing host while another native
+    // pane has focus, then reports a selection at zero. Keep the carried caret.
+    if (!composing && document.hasFocus() && document.activeElement === root) remembered = selection() || remembered;
   });
   root.addEventListener('mousedown', () => { clicked = true; movedSinceInput = true; });
   document.addEventListener('mouseup', () => { clicked = false; });
