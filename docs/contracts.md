@@ -22,4 +22,4 @@ Approved 2026-11-03.
 
 ## Render output
 
-Every rendered element carries `data-src="start:end"` in the range unit above. Elements with no source of their own (for example padding cells GFM adds to short table rows) carry no `data-src`.
+Every rendered element carries `data-src="start:end"` in the range unit above, **relative to the start of its top-level block** (approved 2026-11-04, after Spike 4). The block's own source offset is held in JS, not in the DOM, so text above a block can change without touching it. Elements with no source of their own (for example padding cells GFM adds to short table rows) carry no `data-src`.

@@ -44,15 +44,21 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 
 - 2026-11-04, the owner's call after Spike 3: GO. Full rendered-pane editing stays in scope for v1.
 
-## Proposed, awaiting approval
+## Approved after the spikes
+
+All approved by the owner on 2026-11-04.
 
 - Save strategy: resolve symlinks at open and use the resolved URL as the NSDocument `fileURL`; NSDocument safe save; in-place write when the file has more than one hard link (Spike 2).
-- Remote images blocked by default, with a per-window "Load remote images" bar (Spike 6, open question 1).
-- Local file access root: the git repository root when the document is inside one, otherwise the document's folder; serve the page at the document's matching path so `../` resolves as on disk (Spike 6, open question 2).
-- `data-src` relative to the top-level block, with the block's offset held in JS (Spike 4). Changes an approved contract.
-- Bridge: `v` and `targetV` on messages; `marklight.load`, `patch`, and `done` in place of `update` (Spike 4). Changes an approved contract.
-- Bridge: an `undo` message, and `composed` and `range` on `input` (Spike 5). Changes an approved contract.
+- Remote images blocked by default, with a per-window "Load remote images" bar (Spike 6).
+- Local file access root: the git repository root when the document is inside one, otherwise the document's folder; serve the page at the document's matching path so `../` resolves as on disk (Spike 6).
+- `data-src` relative to the top-level block, with the block's offset held in JS (Spike 4). In `docs/contracts.md`.
+- Bridge: version stamps; `marklight.load`, `patch`, and `done`; an `undo` message; `composed` and `range` on `input` (Spikes 4 and 5). In `docs/bridge.md`.
 - Compare text by UTF-8 bytes, never `String ==`, which treats canonically equivalent text as equal (Spike 2).
+
+## Defaults chosen for M1
+
+- Minimum macOS stays 14: it's still within Apple's usual support window alongside macOS 15 and 26.
+- Autosave is a setting, off by default, because silent in-place saves interact with git and file watchers (`docs/plan.md` 2.7). Coordinator can change this.
 
 ## Known gaps for milestones
 

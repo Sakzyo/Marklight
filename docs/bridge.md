@@ -1,8 +1,8 @@
 # Bridge messages
 
-The rendered pane's JS-to-Swift interface, as settled by Spike 3 (`spikes/spike3-patches/REPORT.md`). Keep this surface minimal: JS reports events as source offsets, and Swift decides what they mean.
+The rendered pane's JS-to-Swift interface, as settled by Spikes 3, 4, and 5. Keep this surface minimal: JS reports events as source offsets, and Swift decides what they mean.
 
-Approved by the owner on 2026-11-04. Changing it needs the Coordinator's approval (`AGENTS.md` section 3). Spike 5 will add composition and undo.
+Approved by the owner on 2026-11-04. Changing it needs the Coordinator's approval (`AGENTS.md` section 3). Updated with the Spike 4 and 5 changes, approved the same day.
 
 All offsets are UTF-16 code units into the decoded text (`docs/contracts.md`). The handler is registered only in the isolated content world (Spike 6), and Swift must check each message's shape against this list and drop anything else.
 
@@ -11,12 +11,15 @@ All offsets are UTF-16 code units into the decoded text (`docs/contracts.md`). T
 | `type` | Fields | When |
 |---|---|---|
 | `ready` | | The bridge has loaded |
-| `input` | `inputType`, `data`, `start`, `end`, `target` | `beforeinput`, with `preventDefault` called. Also sent from `keydown` for plain Backspace and Shift-Enter, which `beforeinput` doesn't reliably report |
-| `paste` | `start`, `end`, `plain`, `blocks` | `paste`. `blocks` is null when the clipboard has no HTML |
-| `toggle` | `kind`, `start`, `end` | Formatting shortcut. `kind` is `strong`, `em`, or `code` |
-| `checkbox` | `at`, `start`, `end` | `mousedown` on a task checkbox. `at` is the item's start; `start` and `end` are the selection to restore |
+| `input` | `v`, `inputType`, `data`, `start`, `end`, `target`, `targetV`, `composed`, `range` | `beforeinput`, with `preventDefault` called. Also sent from `keydown` for plain Backspace and Shift-Enter, which `beforeinput` doesn't reliably report, and from `compositionend` with `composed: true` |
+| `paste` | `v`, `start`, `end`, `plain`, `blocks` | `paste`. `blocks` is null when the clipboard has no HTML |
+| `toggle` | `v`, `kind`, `start`, `end` | Formatting shortcut. `kind` is `strong`, `em`, or `code` |
+| `checkbox` | `v`, `checkbox`, `start`, `end` | `mousedown` on a task checkbox. `checkbox` is the item's start; `start` and `end` are the selection to restore |
+| `undo` | `v`, `redo` | Cmd-Z or Cmd-Shift-Z, or `historyUndo` and `historyRedo` |
 
-- `start` and `end` are the selection. `target` is the first of `getTargetRanges()` as `[start, end]`, or null.
+- `v` is the document version the page had applied, so Swift can carry offsets across edits it hadn't seen. `targetV` is the same for `target`, which is read when the event fires rather than when the message is sent.
+- `start` and `end` are the selection. `target` is the first of `getTargetRanges()` as `[start, end]`, or null. `range` is the selection saved at `compositionstart`, and replaces the live selection.
+- Only one message is in flight. Swift answers each with `marklight.done()`, and the page merges typing that arrives meanwhile.
 - `blocks` is sanitized HTML flattened to `[{kind, runs: [{text, marks, href}]}]`. `kind` is `paragraph`, `h1` to `h6`, `bullet`, `ordered`, `quote`, or `code`.
 - `inputType` values handled: `insertText`, `insertReplacementText`, `insertParagraph`, `insertLineBreak`, `deleteContentBackward`, `deleteContentForward`, `deleteWordBackward`, `deleteWordForward`, `deleteSoftLineBackward`, `deleteSoftLineForward`, `deleteHardLineBackward`, `deleteHardLineForward`, `deleteByCut`, `deleteContent`, `formatBold`, `formatItalic`.
 
@@ -24,7 +27,9 @@ All offsets are UTF-16 code units into the decoded text (`docs/contracts.md`). T
 
 | Call | Purpose |
 |---|---|
-| `marklight.update(html, start, end)` | Sanitize and show `html`, then set the selection. Spike 4 replaces this with block-level DOM patches |
+| `marklight.load(list, v, start, end)` | Show a whole document. `list` is `[{html, base}]`, one per top-level block |
+| `marklight.patch(m)` | Update changed blocks in place. `m`: `{v, from, remove, list, delta, local, caret, edits}` |
+| `marklight.done()` | Swift has finished with the message in flight |
 | `marklight.select(start, end)` | Set the selection |
 | `marklight.selection()` | Read the selection as `[start, end]`, for menu commands |
 
