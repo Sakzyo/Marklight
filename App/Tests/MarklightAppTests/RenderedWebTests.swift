@@ -114,7 +114,7 @@ extension PreviewSuites {
 
         @Test("Browser word and line deletion uses WebKit's real target range")
         func keyboardDeletes() async throws {
-            for (flags, before, after) in [(NSEvent.ModifierFlags.option, "abc xyz‸ q", "abc ‸ q"), (.command, "abc xyz‸ q", "‸ q")] {
+            for (flags, before, after) in [(NSEvent.ModifierFlags.option, "abc xyz‸ q", "abc ‸ q"), (.command, "abc xy‸z q", "‸z q")] {
                 let h = try PreviewHarness(text: unpack(before).text, windowClass: RenderedKeyWindow.self)
                 defer { h.close() }
                 try await beginEditing(h, at: unpack(before).selection)
@@ -123,6 +123,22 @@ extension PreviewSuites {
                 #expect(h.doc.buffer.text == unpack(after).text, "\(before)")
                 try await checkFresh(h)
             }
+        }
+
+        @Test("Deleting to line start cannot discard an untouched leading space")
+        func deleteLeavingWhitespace() async throws {
+            let h = try PreviewHarness(text: "abc xyz q", windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            var beeps = 0
+            h.pane.beep = { beeps += 1 }
+            try await beginEditing(h, at: [7, 7])
+            key(h, "\u{7f}", code: 51, flags: .command)
+            try await waitForAck(h, 1)
+            // CommonMark would consume the space as indentation, changing the
+            // surviving atoms. Refuse this edit before touching the source.
+            #expect(beeps == 1)
+            #expect(h.doc.buffer.units == Array("abc xyz q".utf16))
+            try await checkFresh(h)
         }
 
         @Test("Deleting the last letter leaves a reachable caret and retyping fills it")
@@ -235,15 +251,28 @@ extension PreviewSuites {
             try await beginEditing(h, at: [6, 6])
             let client = try #require(h.webView as Any as? NSTextInputClient)
             let missing = NSRange(location: NSNotFound, length: 0)
+            _ = try await h.js("""
+            window.compositionEnds = 0;
+            document.addEventListener('compositionend', () => compositionEnds++);
+            """)
             client.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: missing)
             await pump(for: 0.05)
+            #expect(try await h.js("""
+            window.markedNode = getSelection().focusNode;
+            window.markedOffset = getSelection().focusOffset;
+            return document.querySelector('#doc').textContent.includes('anibc') && compositionEnds === 0;
+            """) as? Bool == true)
             h.textView.textStorage?.replaceCharacters(in: NSRange(location: 5, length: 0), with: "QQ")
             try await h.settle()
             #expect(h.doc.buffer.text == "top\n\nQQabc\n\ndef")
-            #expect(client.hasMarkedText())
+            #expect(try await h.js("""
+            return markedNode.isConnected && getSelection().focusNode === markedNode && getSelection().focusOffset === markedOffset &&
+                   document.querySelector('#doc').textContent.includes('anibc') && compositionEnds === 0;
+            """) as? Bool == true)
             client.insertText("你", replacementRange: missing)
             try await waitForAck(h, 1)
             #expect(h.doc.buffer.text == "top\n\nQQa你bc\n\ndef")
+            #expect(try await h.js("return window.compositionEnds") as? Int == 1)
             try await checkFresh(h)
 
             _ = try await h.js("marklight.select(8, 14)")
@@ -276,6 +305,37 @@ extension PreviewSuites {
             try await checkFresh(h)
         }
 
+        @Test("Home, End and Page moves queued between real keys replay before the next key")
+        func longMoves() async throws {
+            let text = (0..<120).map { "line \($0) here\n\n" }.joined()
+            let at = (text as NSString).range(of: "line 60 here").location + 3
+            for (chars, code, name) in [("\u{f729}", UInt16(115), "Home"), ("\u{f72b}", 119, "End"),
+                                         ("\u{f72c}", 116, "PageUp"), ("\u{f72d}", 121, "PageDown")] {
+                let h = try PreviewHarness(text: text, size: NSSize(width: 900, height: 450), windowClass: RenderedKeyWindow.self)
+                defer { h.close() }
+                try await beginEditing(h, at: [at, at])
+                _ = try await h.js("""
+                getSelection().focusNode.parentElement.scrollIntoView({block:'center'});
+                const done = marklight.done;
+                marklight.done = () => setTimeout(done, 75);
+                """)
+                key(h, "X")
+                key(h, chars, code: code)
+                key(h, "Y")
+                try await waitForAck(h, 2)
+                let written = h.doc.buffer.text as NSString
+                let x = written.range(of: "X").location, y = written.range(of: "Y").location
+                try #require(x != NSNotFound && y != NSNotFound)
+                switch name {
+                case "Home": #expect(y == 0)
+                case "End": #expect(y == written.length - 3)
+                case "PageUp": #expect(y < x - 20 && y > 0)
+                default: #expect(y > x + 20 && y < written.length - 3)
+                }
+                try await checkFresh(h)
+            }
+        }
+
         @Test("An edit in the other pane preserves the caret node and the next key lands at it")
         func remoteCaret() async throws {
             let text = (0..<160).map { "line \($0) with words\n\n" }.joined()
@@ -298,6 +358,69 @@ extension PreviewSuites {
             key(h, "X")
             try await waitForAck(h, 1)
             #expect(h.doc.buffer.text.contains("line X80 with"))
+            try await checkFresh(h)
+        }
+
+        @Test("The pane receiving Cmd-Z gets the selection in a mixed editing session")
+        func mixedUndo() async throws {
+            let h = try PreviewHarness(text: "ab\r\n", windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            try await beginEditing(h, at: [1, 1])
+            key(h, "X")
+            try await waitForAck(h, 1)
+            try await checkFresh(h)
+            h.window.makeFirstResponder(h.textView)
+            h.textView.setSelectedRange(NSRange(location: 0, length: 0))
+            key(h, "Y")
+            #expect(await pump(until: { h.doc.buffer.text == "YaXb\r\n" }))
+            try await h.settle()
+            h.window.makeFirstResponder(h.webView)
+            _ = try await h.js("document.querySelector('#doc').focus(); marklight.select(3, 3)")
+            key(h, "z", code: 6, flags: .command)
+            try await waitForAck(h, 2)
+            #expect(h.doc.buffer.text == "aXb\r\n")
+            #expect(try await h.js("return marklight.selection()") as? [Int] == [0, 0])
+            try await checkFresh(h)
+            key(h, "Z", code: 6, flags: [.command, .shift])
+            try await waitForAck(h, 3)
+            #expect(h.doc.buffer.text == "YaXb\r\n")
+            try await checkFresh(h)
+
+            // The test process is never the active app. Give the real Edit menu
+            // the responder Cocoa would target in the app's key window.
+            h.window.makeFirstResponder(h.textView)
+            let menu = try #require(MainMenu.make().items.compactMap(\.submenu).first { $0.title == "Edit" })
+            let undo = try #require(menu.items.first { $0.action == #selector(SourceTextView.undo(_:)) })
+            undo.target = h.textView
+            for expected in ["aXb\r\n", "ab\r\n"] {
+                let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: h.window.windowNumber, context: nil,
+                    characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
+                #expect(menu.performKeyEquivalent(with: event))
+                #expect(await pump(until: { h.doc.buffer.text == expected }))
+                try await h.settle()
+                try await checkFresh(h)
+            }
+            #expect(h.textView.selectedRange() == NSRange(location: 1, length: 0))
+            #expect(h.doc.buffer.serialized() == Data("ab\r\n".utf8))
+        }
+
+        @Test("A rendered edit carries the source caret without scrolling its viewport")
+        func sourceHoldsStill() async throws {
+            let original = (0..<250).map { "Paragraph number \($0) has text here.\n\n" }.joined()
+            let h = try PreviewHarness(text: original, size: NSSize(width: 1000, height: 450), windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            let at = (original as NSString).range(of: "Paragraph number 190").location + 4
+            h.textView.setSelectedRange(NSRange(location: at, length: 0))
+            h.textView.scrollRangeToVisible(h.textView.selectedRange())
+            await pump(for: 0.1)
+            try await beginEditing(h, at: [1, 1])
+            let scroll = h.controller.editor.scrollView.contentView.bounds.origin
+            #expect(scroll.y > 0)
+            key(h, "x")
+            try await waitForAck(h, 1)
+            #expect(h.textView.selectedRange() == NSRange(location: at + 1, length: 0))
+            #expect(abs(h.controller.editor.scrollView.contentView.bounds.origin.y - scroll.y) < 1)
             try await checkFresh(h)
         }
 

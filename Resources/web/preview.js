@@ -322,7 +322,12 @@
     const forward = ['ArrowRight', 'ArrowDown', 'End', 'PageDown'].includes(move);
     const direction = forward ? 'forward' : 'backward';
     if (move === 'PageDown' || move === 'PageUp') {
-      const top = () => s.rangeCount ? s.getRangeAt(0).getBoundingClientRect().top : 0;
+      const top = () => {
+        const caret = document.createRange();
+        caret.setStart(s.focusNode, s.focusOffset);
+        caret.collapse(true);
+        return window.scrollY + caret.getBoundingClientRect().top;
+      };
       const first = top();
       for (let lines = 0; lines < innerHeight && Math.abs(top() - first) < innerHeight; lines++) {
         const old = s.focusNode, at = s.focusOffset;
