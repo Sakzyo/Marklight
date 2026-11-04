@@ -262,6 +262,37 @@ extension PreviewSuites {
             try await checkFresh(h)
         }
 
+        @Test("A local Markdown link remains a native link through a delayed Command-click")
+        func delayedCommandClick() async throws {
+            let folder = try makeTemporaryFolder(), url = folder.appendingPathComponent("source.md")
+            let target = folder.appendingPathComponent("other.md")
+            try Data("[other](other.md)".utf8).write(to: url)
+            try Data("target".utf8).write(to: target)
+            let h = try PreviewHarness(url: url)
+            defer { h.close() }
+            var opened: [URL] = []
+            h.pane.openMarkdown = { opened.append($0) }
+            try await h.settle()
+            _ = try await h.js("""
+            // Let timers scheduled by pointerup fire before WebKit's real
+            // mouseup/click. These remain trusted native input events.
+            let inRelease = false;
+            window.addEventListener('pointerup', () => { inRelease = true; }, true);
+            window.addEventListener('mouseup', () => { inRelease = false; }, true);
+            window.addEventListener('click', () => { inRelease = false; }, true);
+            const schedule = window.setTimeout;
+            window.setTimeout = function (callback, ms, ...args) {
+              if (inRelease && ms === 0) { callback(...args); return 0; }
+              return schedule.call(window, callback, ms, ...args);
+            };
+            """)
+            let point = try await h.center(of: "a")
+            await h.click(x: point.x, y: point.y, modifiers: .command)
+            #expect(await pump(until: { !opened.isEmpty }, timeout: 2))
+            #expect(opened.map(\.lastPathComponent) == ["other.md"])
+            #expect(try await h.js("return document.querySelector('a').isContentEditable") as? Bool == true)
+        }
+
         @Test("A raw image map opens only on Cmd-click")
         func imageMapLink() async throws {
             let folder = try makeTemporaryFolder()
