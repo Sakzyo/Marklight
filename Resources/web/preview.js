@@ -300,7 +300,10 @@
     const range = protectedRange(e)?.range || selection() || remembered || [0, 0];
     const saved = blocks.slice(blockIndexAt(range[0]), blockIndexAt(range[1]) + 1)
       .map(block => [block, block.cloneNode(true)]);
-    composing = {range, saved, deferred: []};
+    // Keep both the selection to display after reconciliation and the exact
+    // revision that owns the composition. Only Swift can verify a replacement
+    // across intervening edits without discarding somebody else's text.
+    composing = {original: {range, version}, range, saved, deferred: []};
   });
 
   root.addEventListener('compositionend', e => {
@@ -315,10 +318,14 @@
     let range = session.range;
     for (const m of session.deferred) {
       marklight.patch(m);
-      range = carry(range, m.edits);
+      range = carryComposition(range, m.edits);
     }
     select(...range);
-    if (e.data) enqueue(input('insertText', e.data, null, range));
+    if (e.data) {
+      const committed = input('insertText', e.data, null, session.original.range);
+      committed.fixed = session.original;
+      enqueue(committed);
+    }
   });
 
   const compositionInputs = new Set(['insertCompositionText', 'deleteCompositionText', 'insertFromComposition', 'deleteByComposition']);
@@ -403,6 +410,15 @@
   function carry(range, edits = []) {
     return range.map(offset => edits.reduce((at, [lo, hi, length]) =>
       at >= hi ? at + length - (hi - lo) : at > lo ? lo + length : at, offset));
+  }
+
+  function carryComposition(range, edits = []) {
+    return edits.reduce((selection, edit) => {
+      const [lo, hi] = edit;
+      // Insertion exactly after the original selection stays outside it.
+      if (lo === hi && selection[0] < lo && selection[1] === lo) return selection;
+      return carry(selection, [edit]);
+    }, range);
   }
 
   // Not `selectionchange`, which also fires when a patch replaces selected nodes.
@@ -514,14 +530,13 @@
           composing.deferred.push(m);
           return;
         }
-        composing.range = carry(composing.range, m.edits);
+        composing.range = carryComposition(composing.range, m.edits);
       }
       const anchors = m.local ? [] : scrollAnchors();
       const s = getSelection();
       const selected = !composing && document.activeElement === root ? selection() : null;
       const touched = selected && (live.includes(blockOf(s.anchorNode)) || live.includes(blockOf(s.focusNode)));
       if (remembered) remembered = carry(remembered, m.edits);
-      for (const event of pending) if (event.range) event.range = carry(event.range, m.edits);
       const after = blocks.slice(m.from + m.remove);
       const made = m.list.map(b => makeBlock(b.html, b.base));
       const paired = Math.min(live.length, made.length);

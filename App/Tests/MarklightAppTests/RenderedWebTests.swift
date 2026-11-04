@@ -397,6 +397,37 @@ extension PreviewSuites {
             try await checkFresh(h)
         }
 
+        @Test("A composition cannot overwrite an intervening source edit in its saved range")
+        func composingRangeConflict() async throws {
+            let edits: [(NSRange, String, String, Bool)] = [
+                (NSRange(location: 2, length: 0), "X", "abXcd", false),
+                (NSRange(location: 1, length: 2), "QQ", "aQQd", false),
+                (NSRange(location: 3, length: 0), "X", "aZXd", true),
+                (NSRange(location: 1, length: 0), "X", "aXZd", true),
+            ]
+            for (remote, replacement, expected, accepted) in edits {
+                let h = try PreviewHarness(text: "abcd", windowClass: RenderedKeyWindow.self)
+                defer { h.close() }
+                var beeps = 0
+                h.pane.beep = { beeps += 1 }
+                try await beginEditing(h, at: [1, 3])
+                let client = try #require(h.webView as Any as? NSTextInputClient)
+                let missing = NSRange(location: NSNotFound, length: 0)
+                client.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: missing)
+                await pump(for: 0.04)
+                #expect(h.doc.buffer.text == "abcd")
+                h.textView.textStorage?.replaceCharacters(in: remote, with: replacement)
+                try await h.settle()
+                let version = h.doc.buffer.version
+                client.insertText("Z", replacementRange: missing)
+                try await waitForAck(h, 1)
+                #expect(h.doc.buffer.text == expected, "source edit \(remote)")
+                #expect(h.doc.buffer.version == version + (accepted ? 1 : 0))
+                #expect(beeps == (accepted ? 0 : 1))
+                try await checkFresh(h)
+            }
+        }
+
         @Test("A typing burst queues a move behind the key that precedes it")
         func orderedMovement() async throws {
             let h = try PreviewHarness(text: "ab", windowClass: RenderedKeyWindow.self)
