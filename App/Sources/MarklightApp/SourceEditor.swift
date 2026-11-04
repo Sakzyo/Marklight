@@ -11,7 +11,7 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
     /// True while Swift writes to the text storage, so a change doesn't echo back.
     private var applyingToStorage = false
     private var sendingSourcePatch = false
-    private var compositionBase: [UInt16]?
+    private var compositionBase: (units: [UInt16], selection: Range<Int>?)?
     private var changesDuringComposition: [Patch] = []
     /// A composition is in the text view but not the buffer until it's committed.
     private(set) var isComposing = false
@@ -102,7 +102,8 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         storage.replaceCharacters(in: NSRange(patch.range), with: String(decoding: patch.replacement, as: UTF16.self))
         if selected.location != NSNotFound {
             let from = patch.transform(selected.location), to = patch.transform(NSMaxRange(selected))
-            textView.setSelectedRange(NSRange(location: from, length: to - from))
+            let mapped = NSRange(location: from, length: to - from)
+            if textView.selectedRange() != mapped { textView.setSelectedRange(mapped) }
         }
         if let anchor {
             let rect = textView.firstRect(forCharacterRange: NSRange(location: anchor.offset, length: 0), actualRange: nil)
@@ -124,23 +125,7 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         do {
             guard old.upperBound <= buffer.units.count else { throw BufferError.rangeOutOfBounds }
             let selection = selected.location..<(selected.location + selected.length)
-            // TextKit sometimes reports an entire attributed line for one key.
-            // Find the actual edit within it so redo restores the typed caret.
-            var patch = Patch(range: old, replacement: new, origin: .source)
-            if old != selection && !old.isEmpty {
-                let original = Array(buffer.units[old])
-                let start = selection.lowerBound - old.lowerBound
-                let tail = old.upperBound - selection.upperBound
-                if start >= 0, tail >= 0, start + tail <= new.count,
-                   original.prefix(start).elementsEqual(new.prefix(start)),
-                   original.suffix(tail).elementsEqual(new.suffix(tail)) {
-                    patch = Patch(range: selection, replacement: Array(new[start..<(new.count - tail)]), origin: .source)
-                } else {
-                    let part = Patch.minimal(from: original, to: new, origin: .source)
-                    patch = Patch(range: (old.lowerBound + part.range.lowerBound)..<(old.lowerBound + part.range.upperBound),
-                                  replacement: part.replacement, origin: .source)
-                }
-            }
+            let patch = storagePatch(in: buffer.units, range: old, replacement: new, selection: selection)
             try buffer.apply(patch, selectionBefore: selection)
         } catch {
             // The two copies disagree, and the buffer is the truth. Not from the
@@ -149,15 +134,35 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         }
     }
 
+    /// TextKit sometimes reports an entire attributed line for one key. Prefer
+    /// the actual selection if the bytes outside it are known to be unchanged.
+    private func storagePatch(in units: [UInt16], range: Range<Int>, replacement: [UInt16], selection: Range<Int>?) -> Patch {
+        if range.isEmpty || range == selection { return Patch(range: range, replacement: replacement, origin: .source) }
+        let original = units[range]
+        if let selection {
+            let start = selection.lowerBound - range.lowerBound, tail = range.upperBound - selection.upperBound
+            if start >= 0, tail >= 0, start + tail <= replacement.count,
+               original.prefix(start).elementsEqual(replacement.prefix(start)),
+               original.suffix(tail).elementsEqual(replacement.suffix(tail)) {
+                return Patch(range: selection, replacement: Array(replacement[start..<(replacement.count - tail)]), origin: .source)
+            }
+        }
+        let part = Patch.minimal(from: Array(original), to: replacement, origin: .source)
+        return Patch(range: (range.lowerBound + part.range.lowerBound)..<(range.lowerBound + part.range.upperBound),
+                     replacement: part.replacement, origin: .source)
+    }
+
     // MARK: - Composition
 
-    func compositionWillChange() {
-        if !isComposing { compositionBase = buffer.units }
+    func compositionWillChange(replacing replacement: NSRange) {
+        guard !isComposing else { return }
+        let selection = replacement.location == NSNotFound ? textView.selectedRange() : replacement
+        compositionBase = (buffer.units, Range(selection))
         isComposing = true
     }
 
-    /// Marked text never reaches the buffer. Whatever the composition left behind
-    /// goes in as one patch.
+    /// Marked text never reaches the buffer. Verify any change from the other
+    /// pane against the original marked selection before committing anything.
     func compositionEnded() {
         guard isComposing, let base = compositionBase, let storage = textView.textStorage else { return }
         isComposing = false
@@ -165,22 +170,31 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         let remote = changesDuringComposition
         changesDuringComposition.removeAll()
         let units = Array(storage.string.utf16)
-        var patch = Patch.minimal(from: base, to: units, origin: .source)
-        if !remote.isEmpty {
-            // Keep WebKit's last verified patch if it reached this view while
-            // NSTextInputClient owned the marked range.
-            syncStorage()
-            for change in remote {
-                if patch.range.overlaps(change.range) { NSSound.beep(); return }
-                patch = Patch(range: change.transform(patch.range.lowerBound)..<change.transform(patch.range.upperBound),
-                              replacement: patch.replacement, origin: .source)
-            }
+        if !remote.isEmpty { syncStorage() }
+        guard units != base.units else { return }
+        var patch = storagePatch(in: base.units, range: 0..<base.units.count, replacement: units, selection: base.selection)
+        var selection = base.selection ?? patch.range
+        for change in remote {
+            guard let nextSelection = rebaseEdit(selection, over: change),
+                  let nextRange = rebaseEdit(patch.range, over: change) else { NSSound.beep(); return }
+            selection = nextSelection
+            patch = Patch(range: nextRange, replacement: patch.replacement, origin: .source)
         }
-        guard !patch.range.isEmpty || !patch.replacement.isEmpty else { return }
         buffer.sealUndoStep()
         sendingSourcePatch = remote.isEmpty
         defer { sendingSourcePatch = false }
-        try? buffer.apply(patch)
+        let end = patch.range.lowerBound + patch.replacement.count
+        let part = Patch.minimal(from: Array(buffer.units[patch.range]), to: patch.replacement, origin: .source)
+        let start = patch.range.lowerBound
+        patch = Patch(range: (start + part.range.lowerBound)..<(start + part.range.upperBound),
+                      replacement: part.replacement, origin: .source)
+        do {
+            try buffer.apply(patch, selectionBefore: selection)
+            if !remote.isEmpty { textView.setSelectedRange(NSRange(location: end, length: 0)) }
+        } catch {
+            syncStorage()
+            NSSound.beep()
+        }
         buffer.sealUndoStep()
     }
 
@@ -239,7 +253,7 @@ final class SourceTextView: NSTextView {
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
-        editor?.compositionWillChange()
+        editor?.compositionWillChange(replacing: replacementRange)
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
     }
 

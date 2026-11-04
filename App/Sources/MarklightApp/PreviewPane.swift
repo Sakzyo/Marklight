@@ -267,9 +267,9 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     }
 
     private func apply(_ input: Input) {
-        guard !buffer.isReadOnly, let selection = updater.current(input.selection, at: input.version),
+        guard !buffer.isReadOnly, let selection = updater.current(input.selection, at: input.version, inputType: input.type),
               input.targetVersion >= 0, input.targetVersion <= buffer.version else { return refuse() }
-        let target = input.target.flatMap { updater.current($0, at: input.targetVersion) }
+        let target = input.target.flatMap { updater.current($0, at: input.targetVersion, inputType: input.type) }
         guard input.target == nil || target != nil else { return refuse() }
         let generation = self.generation
         updater.verify(inputType: input.type, data: input.data, selection: selection,

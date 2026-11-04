@@ -74,7 +74,7 @@ final class PreviewUpdater {
 
     /// Validate against the text the page saw before transforming. In particular
     /// an invalid old offset must not be made valid by clamping it into a deletion.
-    func current(_ range: Range<Int>, at version: Int) -> Range<Int>? {
+    func current(_ range: Range<Int>, at version: Int, inputType: String? = nil) -> Range<Int>? {
         guard version >= 0, version <= buffer.version, range.lowerBound >= 0 else { return nil }
         var carried = range
         if version != buffer.version {
@@ -82,6 +82,11 @@ final class PreviewUpdater {
                   range.upperBound <= changes[first].oldLength else { return nil }
             for change in changes[first...] {
                 let patch = change.patch
+                if let inputType {
+                    guard let next = rebaseEdit(carried, over: patch, deletingAtCaret: inputType.hasPrefix("delete")) else { return nil }
+                    carried = next
+                    continue
+                }
                 // The original text at an endpoint disappeared. A queued input
                 // can no longer prove which character the user meant.
                 for end in [carried.lowerBound, carried.upperBound]
