@@ -75,6 +75,27 @@ extension PreviewSuites {
             #expect(second.layout == .preview)
         }
 
+        @Test("A window shown by state restoration still gets its preview")
+        func restoredWindow() async throws {
+            let folder = try makeTemporaryFolder()
+            let url = folder.appendingPathComponent("doc.md")
+            try Data("# Restored\n".utf8).write(to: url)
+            let doc = try MarkdownDocument(contentsOf: url, ofType: MarkdownDocument.markdownType)
+            let controller = EditorWindowController(document: doc, layout: .split)
+            doc.addWindowController(controller)
+            defer { doc.close() }
+            #expect(controller.preview == nil)
+
+            controller.windowBecameVisible() // restoration orders the window in, with no `showWindow`
+            let pane = try #require(controller.preview)
+            #expect(await pump(until: { pane.updater.isCurrent }))
+            #expect(!pane.view.superview!.isHidden)
+
+            let same = pane
+            controller.windowBecameVisible()
+            #expect(controller.preview === same)
+        }
+
         @Test("A source-only window never makes a web view")
         func sourceOnly() throws {
             let h = try PreviewHarness(text: "a\n", layout: .source)
@@ -147,6 +168,22 @@ extension PreviewSuites {
             defer { remote.close() }
             try await remote.settle()
             #expect(!remote.pane.bar.isHidden)
+        }
+
+        @Test("The bar really takes up space, with its button inside it")
+        func barLayout() async throws {
+            let h = try PreviewHarness(text: "![a](https://example.invalid/a.png)\n")
+            defer { h.close() }
+            try await h.settle()
+            await pump(for: 0.05)
+            h.pane.view.layoutSubtreeIfNeeded()
+            let bar = h.pane.bar
+            #expect(bar.frame.height >= 24, "\(bar.frame)")
+            #expect(bar.frame.width == h.pane.view.frame.width, "\(bar.frame)")
+            #expect(h.webView.frame.height + bar.frame.height == h.pane.view.frame.height, "\(h.webView.frame) \(h.pane.view.frame)")
+            let button = bar.button.convert(bar.button.bounds, to: bar)
+            #expect(bar.bounds.contains(button), "\(button) in \(bar.bounds)")
+            #expect(button.width > 50)
         }
 
         @Test("The bar follows edits")

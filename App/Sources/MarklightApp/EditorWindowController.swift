@@ -22,6 +22,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     private(set) var preview: PreviewPane?
     private(set) var layout: PaneLayout
     private var dividerShare: CGFloat = 0.5
+    private var layoutApplied = false
     private let defences: PreviewDefences
 
     /// True while the source pane follows the preview, so it doesn't echo back.
@@ -80,6 +81,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         (document as? MarkdownDocument)?.checkForExternalChange()
     }
 
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        if window?.occlusionState.contains(.visible) == true { windowBecameVisible() }
+    }
+
+    /// State restoration shows a window without going through `showWindow`.
+    func windowBecameVisible() {
+        if !layoutApplied { applyLayout() }
+    }
+
     // MARK: - Layout
 
     /// Switches this window, and every window opened from now on.
@@ -91,6 +101,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     }
 
     private func applyLayout() {
+        layoutApplied = true
         let showsSource = layout != .preview, showsPreview = layout != .source
         if showsPreview { makePreviewIfNeeded() }
         editor.scrollView.isHidden = !showsSource

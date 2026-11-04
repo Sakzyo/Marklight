@@ -328,6 +328,8 @@ final class RemoteImagesBar: NSBox {
         row.orientation = .horizontal
         row.distribution = .equalSpacing
         contentView = row
+        // An NSBox takes no height from its content.
+        heightAnchor.constraint(equalToConstant: 36).isActive = true
     }
 
     @available(*, unavailable)
