@@ -37,12 +37,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     /// How long the source caret rests before the preview follows it.
     static let revealDelay = 0.05
 
-    init(document: MarkdownDocument, layout: PaneLayout = .remembered, defences: PreviewDefences = PreviewDefences()) {
+    init(document: MarkdownDocument, layout: PaneLayout = .remembered, defences: PreviewDefences = PreviewDefences(),
+         windowClass: NSWindow.Type = NSWindow.self) {
         editor = SourceEditor(buffer: document.buffer)
         buffer = document.buffer
         self.layout = layout
         self.defences = defences
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 820),
+        let window = windowClass.init(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 820),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         split.isVertical = true
@@ -138,10 +139,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         guard preview == nil else { return }
         let pane = PreviewPane(buffer: buffer, documentURL: (document as? MarkdownDocument)?.fileURL, defences: defences)
         pane.selectionChanged = { [weak self] range in self?.followPreview(range) }
-        pane.webView.undoAction = { [weak self] in self?.editor.undo() }
-        pane.webView.redoAction = { [weak self] in self?.editor.redo() }
-        pane.webView.canUndo = { [weak self] in self?.buffer.canUndo ?? false }
-        pane.webView.canRedo = { [weak self] in self?.buffer.canRedo ?? false }
         pane.view.translatesAutoresizingMaskIntoConstraints = true
         pane.view.autoresizingMask = [.width, .height]
         pane.view.frame = previewHolder.bounds

@@ -9,15 +9,13 @@ struct PreviewDefences {
     var pageJavaScriptOff = true
 }
 
-/// The rendered pane: a web view showing the buffer, read-only for now.
+/// The rendered pane: a web view showing the buffer. Rendered input is verified by Swift.
 ///
 /// Rendered content is untrusted (`docs/plan.md` 2.6). The page runs no script,
 /// Marklight's JS lives in an isolated content world, and the page can't navigate.
 final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     static let world = WKContentWorld.world(name: "marklight")
     private static let messageHandler = "marklight"
-    /// How far back a `selection` message's offsets can be carried.
-    private static let patchHistory = 512
 
     let view: NSStackView
     let webView: PreviewWebView
@@ -33,8 +31,10 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     private(set) var remoteImagesAllowed = false
     private var scrollToRestore: Double?
     private var pendingReveal: Int?
-    private var observer: UUID?
-    private var patches: [(version: Int, patch: Patch)] = []
+    private var inFlight = false
+    private var waitingForVersion: Int?
+    private var generation = 0
+    var beep: () -> Void = { NSSound.beep() }
     private(set) var rejectedMessages: [String] = []
 
     /// The user clicked or selected in the preview. The range is in the current text.
@@ -82,12 +82,15 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
             present(update, done: done)
         }
         updater.caughtUp = { [weak self] in self?.flushReveal() }
-        observer = buffer.addObserver { [weak self] patch in self?.remember(patch) }
+        updater.presented = { [weak self] version in
+            guard let self, let waiting = waitingForVersion, version >= waiting else { return }
+            finishInput()
+        }
+        webView.undoAction = { [weak self] in self?.menuHistory(redo: false) }
+        webView.redoAction = { [weak self] in self?.menuHistory(redo: true) }
+        webView.canUndo = { [weak self] in self.map { $0.inFlight || $0.buffer.canUndo } ?? false }
+        webView.canRedo = { [weak self] in self?.buffer.canRedo ?? false }
         loadPage()
-    }
-
-    deinit {
-        if let observer { buffer.removeObserver(observer) }
     }
 
     /// Hiding the pane stops the work it would do. Showing it catches up.
@@ -107,6 +110,9 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
     // MARK: - Page
 
     private func loadPage() {
+        generation += 1
+        inFlight = false
+        waitingForVersion = nil
         pageLoadPending = true
         updater.pageWillLoad()
         webView.load(URLRequest(url: location.pageURL))
@@ -135,12 +141,18 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         let arguments: [String: Any]
         switch update.content {
         case .load(let blocks):
-            code = "marklight.load(list, v)"
-            arguments = ["list": blocks.map(block), "v": update.version]
+            code = """
+            document.getElementById('doc').contentEditable = editable ? 'true' : 'false';
+            marklight.load(list, v, start, end);
+            """
+            arguments = ["list": blocks.map(block), "v": update.version, "editable": !buffer.isReadOnly,
+                         "start": update.caret?.lowerBound as Any? ?? NSNull(), "end": update.caret?.upperBound as Any? ?? NSNull()]
         case .patch(let patch):
             code = "marklight.patch(m)"
             arguments = ["m": ["v": update.version, "from": patch.from, "remove": patch.remove,
-                               "list": patch.list.map(block), "delta": patch.delta] as [String: Any]]
+                               "list": patch.list.map(block), "delta": patch.delta,
+                               "local": update.caret != nil, "edits": update.edits,
+                               "caret": update.caret.map { [$0.lowerBound, $0.upperBound] } as Any? ?? NSNull()] as [String: Any]]
         }
         webView.callAsyncJavaScript(code, arguments: arguments, in: nil, in: PreviewPane.world) { [weak self] result in
             if case .failure = result { return done(false) }
@@ -166,19 +178,6 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         webView.callAsyncJavaScript("marklight.reveal(offset)", arguments: ["offset": offset], in: nil, in: PreviewPane.world)
     }
 
-    private func remember(_ patch: Patch) {
-        patches.append((buffer.version, patch))
-        if patches.count > PreviewPane.patchHistory { patches.removeFirst(patches.count - PreviewPane.patchHistory) }
-    }
-
-    /// Offsets from the page refer to the text it had. Carries them to the buffer's
-    /// text, or gives nil if that was too long ago to know.
-    private func current(_ offset: Int, at version: Int) -> Int? {
-        guard version < buffer.version else { return offset }
-        guard let oldest = patches.first?.version, oldest <= version + 1 else { return nil }
-        return patches.reduce(offset) { $1.version > version ? $1.patch.transform($0) : $0 }
-    }
-
     // MARK: - Bridge
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -189,13 +188,113 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         case "ready" where body.count == 1:
             updater.pageReady()
         case "selection" where body.count == 4:
-            guard let v = body["v"] as? Int, let start = body["start"] as? Int, let end = body["end"] as? Int,
-                  v >= 0, v <= buffer.version, start >= 0, start <= end else { return reject(message) }
-            guard let from = current(start, at: v), let to = current(end, at: v), to <= buffer.units.count else { return }
-            selectionChanged?(from..<to)
+            guard let v = Self.integer(body["v"]), v >= 0, v <= buffer.version,
+                  let range = Self.range(body["start"], body["end"]) else { return reject(message) }
+            if let current = updater.current(range, at: v) { selectionChanged?(current) }
+        case "input":
+            guard !inFlight, let input = Input(body) else { return reject(message) }
+            inFlight = true
+            apply(input)
+        case "undo" where body.count == 3:
+            guard !inFlight, let v = Self.integer(body["v"]), v >= 0, v <= buffer.version,
+                  let redo = Self.boolean(body["redo"]) else { return reject(message) }
+            inFlight = true
+            guard let result = redo ? buffer.redo() : buffer.undo() else { return finishInput() }
+            waitingForVersion = buffer.version
+            updater.historyMoved(to: result.selection)
         default:
             reject(message)
         }
+    }
+
+    private struct Input {
+        let version: Int
+        let type: String
+        let data: String?
+        let selection: Range<Int>
+        let target: Range<Int>?
+        let targetVersion: Int
+        let composed: Bool
+
+        init?(_ body: [String: Any]) {
+            guard body.count == 10, let v = integer(body["v"]), let kind = body["inputType"] as? String,
+                  let tv = integer(body["targetV"]), let composed = boolean(body["composed"]),
+                  let selected = range(body["start"], body["end"]),
+                  let data = body["data"], data is NSNull || data is String,
+                  let rawTarget = body["target"], let rawRange = body["range"] else { return nil }
+            func pair(_ value: Any) -> Range<Int>? {
+                guard let pair = value as? [Any], pair.count == 2 else { return nil }
+                return PreviewPane.range(pair[0], pair[1])
+            }
+            let target = pair(rawTarget), saved = pair(rawRange)
+            guard (rawTarget is NSNull || target != nil), composed ? saved == selected && kind == "insertText" : rawRange is NSNull else { return nil }
+            version = v
+            type = kind
+            self.data = data as? String
+            selection = saved ?? selected
+            self.target = target
+            targetVersion = tv
+            self.composed = composed
+        }
+    }
+
+    // WK bridges JS booleans as NSNumber too. Refuse them in integer fields.
+    private static func integer(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return value as? Int
+    }
+
+    private static func boolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
+    private static func range(_ start: Any?, _ end: Any?) -> Range<Int>? {
+        guard let lo = integer(start), let hi = integer(end), lo >= 0, hi >= lo else { return nil }
+        return lo..<hi
+    }
+
+    private func apply(_ input: Input) {
+        guard !buffer.isReadOnly, let selection = updater.current(input.selection, at: input.version),
+              input.targetVersion >= 0, input.targetVersion <= buffer.version else { return refuse() }
+        let target = input.target.flatMap { updater.current($0, at: input.targetVersion) }
+        guard input.target == nil || target != nil else { return refuse() }
+        let generation = self.generation
+        updater.verify(inputType: input.type, data: input.data, selection: selection,
+                       target: input.type == "insertText" ? nil : target) { [weak self] version, edit in
+            guard let self, self.generation == generation else { return }
+            // A source key may have arrived during verification. Rebase the
+            // intent and verify that candidate against the buffer now on screen.
+            guard version == self.buffer.version else { return self.apply(input) }
+            guard let edit else { return self.refuse() }
+            let separateStep = input.composed || !selection.isEmpty || self.updater.pending != nil || edit.pending != nil
+            if separateStep { self.buffer.sealUndoStep() }
+            do {
+                try self.buffer.apply(edit.patch, selectionBefore: selection)
+                if separateStep { self.buffer.sealUndoStep() }
+                self.waitingForVersion = self.buffer.version
+                self.updater.accepted(edit)
+            } catch { self.refuse() }
+        }
+    }
+
+    private func refuse() {
+        beep()
+        finishInput()
+    }
+
+    private func finishInput() {
+        waitingForVersion = nil
+        inFlight = false
+        webView.callAsyncJavaScript("marklight.done()", arguments: [:], in: nil, in: PreviewPane.world)
+    }
+
+    /// Route menu commands through the page's input queue. Its unacknowledged
+    /// typing belongs before this undo, even when Swift hasn't seen it yet.
+    private func menuHistory(redo: Bool) {
+        webView.callAsyncJavaScript("""
+        document.getElementById('doc').dispatchEvent(new InputEvent('beforeinput', {bubbles:true, cancelable:true, inputType:kind}));
+        """, arguments: ["kind": redo ? "historyRedo" : "historyUndo"], in: nil, in: PreviewPane.world)
     }
 
     private func reject(_ message: WKScriptMessage) {

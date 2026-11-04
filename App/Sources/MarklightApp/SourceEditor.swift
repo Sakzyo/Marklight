@@ -10,6 +10,9 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
     private let highlighter: SourceHighlighter
     /// True while Swift writes to the text storage, so a change doesn't echo back.
     private var applyingToStorage = false
+    private var sendingSourcePatch = false
+    private var compositionBase: [UInt16]?
+    private var changesDuringComposition: [Patch] = []
     /// A composition is in the text view but not the buffer until it's committed.
     private(set) var isComposing = false
     private var observer: UUID?
@@ -29,7 +32,10 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         textView.setSelectedRange(NSRange(location: 0, length: 0)) // setting the text leaves the caret at the end
         observer = buffer.addObserver { [weak self] patch in
             guard let self else { return }
-            if patch.origin != .source { apply(patch) }
+            if !sendingSourcePatch {
+                if isComposing { changesDuringComposition.append(patch) }
+                else { apply(patch) }
+            }
             highlighter.scheduleUpdate()
         }
         highlighter.update()
@@ -73,10 +79,36 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
     /// Writes a change that didn't start here, such as undo or a reload from disk.
     private func apply(_ patch: Patch) {
         guard let storage = textView.textStorage else { return }
+        let beforeLength = buffer.units.count - patch.replacement.count + patch.range.count
+        guard storage.length == beforeLength, patch.range.upperBound <= storage.length else {
+            syncStorage()
+            textView.isEditable = !buffer.isReadOnly
+            return
+        }
+        let selected = textView.selectedRange(), clip = scrollView.contentView
+        let origin = clip.bounds.origin
+        var anchor: (offset: Int, screenY: CGFloat)?
+        if patch.origin == .rendered && origin.y > 0 && !scrollView.isHidden {
+            let point = textView.convert(NSPoint(x: clip.bounds.minX + textView.textContainerInset.width + 2,
+                                                 y: clip.bounds.minY + 2), from: clip)
+            let index = textView.characterIndexForInsertion(at: point)
+            if patch.range.upperBound <= index && index <= storage.length {
+                anchor = (patch.transform(index), textView.firstRect(forCharacterRange: NSRange(location: index, length: 0), actualRange: nil).minY)
+            }
+        }
         applyingToStorage = true
-        storage.beginEditing()
         storage.replaceCharacters(in: NSRange(patch.range), with: String(decoding: patch.replacement, as: UTF16.self))
-        storage.endEditing()
+        if selected.location != NSNotFound {
+            let from = patch.transform(selected.location), to = patch.transform(NSMaxRange(selected))
+            textView.setSelectedRange(NSRange(location: from, length: to - from))
+        }
+        if var anchorPoint = anchor {
+            let rect = textView.firstRect(forCharacterRange: NSRange(location: anchorPoint.offset, length: 0), actualRange: nil)
+            anchorPoint.screenY -= rect.minY
+            clip.scroll(to: NSPoint(x: origin.x, y: clip.bounds.origin.y + anchorPoint.screenY))
+        } else if origin != clip.bounds.origin {
+            clip.scroll(to: origin)
+        }
         applyingToStorage = false
         textView.isEditable = !buffer.isReadOnly
     }
@@ -86,6 +118,8 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         let old = range.location..<(range.location + range.length - delta)
         let new = Array((storage.string as NSString).substring(with: range).utf16)
         let selected = textView.selectedRange()
+        sendingSourcePatch = true
+        defer { sendingSourcePatch = false }
         do {
             try buffer.apply(Patch(range: old, replacement: new, origin: .source),
                              selectionBefore: selected.location..<(selected.location + selected.length))
@@ -99,18 +133,34 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
     // MARK: - Composition
 
     func compositionWillChange() {
+        if !isComposing { compositionBase = buffer.units }
         isComposing = true
     }
 
     /// Marked text never reaches the buffer. Whatever the composition left behind
     /// goes in as one patch.
     func compositionEnded() {
-        guard isComposing, let storage = textView.textStorage else { return }
+        guard isComposing, let base = compositionBase, let storage = textView.textStorage else { return }
         isComposing = false
+        compositionBase = nil
+        let remote = changesDuringComposition
+        changesDuringComposition.removeAll()
         let units = Array(storage.string.utf16)
-        guard units != buffer.units else { return }
+        var patch = Patch.minimal(from: base, to: units, origin: .source)
+        if !remote.isEmpty {
+            // Keep WebKit's last verified patch if it reached this view while
+            // NSTextInputClient owned the marked range.
+            syncStorage()
+            for change in remote {
+                if patch.range.overlaps(change.range) { NSSound.beep(); return }
+                patch = Patch(range: change.transform(patch.range.lowerBound)..<change.transform(patch.range.upperBound),
+                              replacement: patch.replacement, origin: .source)
+            }
+        }
+        guard !patch.range.isEmpty || !patch.replacement.isEmpty else { return }
         buffer.sealUndoStep()
-        let patch = Patch.minimal(from: buffer.units, to: units, origin: .source)
+        sendingSourcePatch = remote.isEmpty
+        defer { sendingSourcePatch = false }
         try? buffer.apply(patch)
         buffer.sealUndoStep()
     }
