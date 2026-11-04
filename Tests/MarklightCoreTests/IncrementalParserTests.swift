@@ -106,6 +106,16 @@ struct IncrementalParserTests {
         }
     }
 
+    @Test("A local reparse keeps marks in different blocks distinct")
+    func markIdentity() throws {
+        let text = "*a*\n\n*b*\n\n*c*\n\n*d*\n\n*e*"
+        let at = (text as NSString).range(of: "d").location
+        let doc = IncrementalDocument(units: Array(text.utf16)).applying(Patch(range: at..<at, replacement: [120], origin: .rendered))
+        try #require(!doc.usedFullParse)
+        let marks = try (0..<doc.blockCount).map { index in try #require(doc.block(at: index).atoms.first?.marks.first) }
+        #expect(Set(marks).count == doc.blockCount)
+    }
+
     @Test("Edits that cross Markdown context boundaries match a full parse")
     func contextChanges() throws {
         let gap = (0..<12).map { "Unrelated \($0)\n\n" }.joined()

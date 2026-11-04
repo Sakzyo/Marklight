@@ -9,13 +9,20 @@ public struct Mark: Hashable, Sendable {
         case link(destination: String)
     }
 
+    /// Numbering is local to one parse. A window can share its document with
+    /// older subtrees whose marks have the same number.
+    fileprivate final class Namespace: Sendable {}
+    fileprivate let namespace: Namespace
     public let kind: Kind
     public let id: Int
     public let open: [UInt16]
     public let close: [UInt16]
 
-    public static func == (a: Mark, b: Mark) -> Bool { a.id == b.id }
-    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    public static func == (a: Mark, b: Mark) -> Bool { a.namespace === b.namespace && a.id == b.id }
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(namespace))
+        hasher.combine(id)
+    }
 }
 
 /// One rendered unit. Text atoms are single UTF-16 units, so rendered offsets line
@@ -180,6 +187,7 @@ public final class ParsedDocument {
     public let root: Block
     private let lines: LineMap
     private let entities = EntityDecoder()
+    private let namespace = Mark.Namespace()
     private var nextMark = 0
 
     public init(units: [UInt16]) {
@@ -301,7 +309,7 @@ public final class ParsedDocument {
         default:
             break
         }
-        var walker = InlineWalker(units: units, start: start, quoteDepth: block.quoteDepth, nextMark: nextMark, entities: entities)
+        var walker = InlineWalker(units: units, start: start, quoteDepth: block.quoteDepth, nextMark: nextMark, namespace: namespace, entities: entities)
         do {
             block.inlines = try walker.walk(Array(node.children), marks: [])
         } catch {
@@ -392,13 +400,15 @@ private struct InlineWalker {
     let quoteDepth: Int
     var atoms: [Atom] = []
     var nextMark: Int
+    let namespace: Mark.Namespace
     let entities: EntityDecoder
 
-    init(units: [UInt16], start: Int, quoteDepth: Int, nextMark: Int, entities: EntityDecoder) {
+    init(units: [UInt16], start: Int, quoteDepth: Int, nextMark: Int, namespace: Mark.Namespace, entities: EntityDecoder) {
         u = units
         cursor = start
         self.quoteDepth = quoteDepth
         self.nextMark = nextMark
+        self.namespace = namespace
         self.entities = entities
     }
 
@@ -450,7 +460,7 @@ private struct InlineWalker {
         case let image as Image:
             guard u.at(cursor) == 0x21, u.at(cursor + 1) == 0x5B else { throw WalkFailure() }
             cursor += 2
-            var alt = InlineWalker(units: u, start: cursor, quoteDepth: quoteDepth, nextMark: nextMark, entities: entities)
+            var alt = InlineWalker(units: u, start: cursor, quoteDepth: quoteDepth, nextMark: nextMark, namespace: namespace, entities: entities)
             _ = try alt.walk(Array(image.children), marks: [])
             cursor = alt.cursor
             guard u.at(cursor) == 0x5D else { throw WalkFailure() }
@@ -473,7 +483,7 @@ private struct InlineWalker {
 
     private mutating func makeMark(_ kind: Mark.Kind, open: [UInt16], close: [UInt16]) -> Mark {
         nextMark += 1
-        return Mark(kind: kind, id: nextMark, open: open, close: close)
+        return Mark(namespace: namespace, kind: kind, id: nextMark, open: open, close: close)
     }
 
     /// Groups atoms into 1:1 runs, with every escape or entity a run of its own.
