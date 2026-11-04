@@ -2,7 +2,7 @@
 
 The rendered pane's JS-to-Swift interface, as settled by Spike 3 (`spikes/spike3-patches/REPORT.md`). Keep this surface minimal: JS reports events as source offsets, and Swift decides what they mean.
 
-**Status: proposed, awaiting Coordinator approval.** Spike 5 will add composition and undo.
+Approved by the owner on 2026-11-04. Changing it needs the Coordinator's approval (`AGENTS.md` section 3). Spike 5 will add composition and undo.
 
 All offsets are UTF-16 code units into the decoded text (`docs/contracts.md`). The handler is registered only in the isolated content world (Spike 6), and Swift must check each message's shape against this list and drop anything else.
 

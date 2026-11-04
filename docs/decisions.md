@@ -38,14 +38,17 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 ## Contracts
 
 - 2026-11-03, approved by the owner: `Patch` and `data-src` ranges are UTF-16 code units into the decoded text (Spike 1). Both panes produce UTF-16 offsets natively; only the parser adapter converts from swift-markdown's UTF-8 columns. Written down in `docs/contracts.md`.
+- 2026-11-04, approved by the owner: the bridge messages and the `data-run`, `data-atomic`, `data-caret` and `data-raw` render attributes in `docs/bridge.md` (Spike 3).
+
+## Go/no-go
+
+- 2026-11-04, the owner's call after Spike 3: GO. Full rendered-pane editing stays in scope for v1.
 
 ## Proposed, awaiting approval
 
 - Save strategy: resolve symlinks at open and use the resolved URL as the NSDocument `fileURL`; NSDocument safe save; in-place write when the file has more than one hard link (Spike 2).
 - Remote images blocked by default, with a per-window "Load remote images" bar (Spike 6, open question 1).
 - Local file access root: the git repository root when the document is inside one, otherwise the document's folder; serve the page at the document's matching path so `../` resolves as on disk (Spike 6, open question 2).
-- Bridge messages and the `data-run`, `data-atomic`, `data-caret` and `data-raw` render attributes in `docs/bridge.md` (Spike 3).
-- Go/no-go after Spike 3: GO, full rendered-pane editing stays in scope (Spike 3).
 - Compare text by UTF-8 bytes, never `String ==`, which treats canonically equivalent text as equal (Spike 2).
 
 ## Spike results
