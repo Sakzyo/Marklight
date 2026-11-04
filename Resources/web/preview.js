@@ -230,6 +230,12 @@
     return {type: 'input', inputType, data, target, targetV: version, composed: range !== null, range};
   }
 
+  // AppKit can deliver the first key after native refocus before WebKit
+  // delivers its DOM focus event. At that instant the live range may be zero.
+  function returningCaret() {
+    return !clicked && !document.hasFocus() && document.activeElement === root ? remembered : null;
+  }
+
   function sendNext() {
     while (!inFlight && pending.length) {
       const event = pending.shift();
@@ -242,7 +248,7 @@
         message = {...event, v: version};
       } else {
         const {fixed, ...fields} = event;
-        const [start, end] = fixed?.range || event.range || selection() || remembered || [0, 0];
+        const [start, end] = fixed?.range || event.range || returningCaret() || selection() || remembered || [0, 0];
         message = {...fields, v: fixed?.version ?? version, start, end};
       }
       inFlight = true;
@@ -299,7 +305,7 @@
   // Native input methods temporarily own the DOM. Preserve every top-level
   // block covered by their selection; a cancellation may span several blocks.
   root.addEventListener('compositionstart', e => {
-    const range = protectedRange(e)?.range || selection() || remembered || [0, 0];
+    const range = protectedRange(e)?.range || returningCaret() || selection() || remembered || [0, 0];
     const saved = blocks.slice(blockIndexAt(range[0]), blockIndexAt(range[1]) + 1)
       .map(block => [block, block.cloneNode(true)]);
     // Keep both the selection to display after reconciliation and the exact
@@ -342,7 +348,7 @@
       ? [toSource(r.startContainer, r.startOffset), toSource(r.endContainer, r.endOffset)] : null;
     // An ordinary key arriving before the previous edit/navigation lands has
     // no target in the resulting DOM yet. Use its caret at dispatch time.
-    const stale = e.inputType === 'insertText' && (inFlight || pending.length);
+    const stale = e.inputType === 'insertText' && (inFlight || pending.length || returningCaret());
     submit(e, input(e.inputType, e.data, stale ? null : target));
   });
 
@@ -384,6 +390,8 @@
 
   root.addEventListener('keydown', e => {
     if (composing || e.isComposing || e.keyCode === 229) return;
+    const returning = returningCaret();
+    if (e.target === root && returning) select(...returning);
     if (navigation.has(e.key)) {
       if (inFlight || pending.length) {
         e.preventDefault();
