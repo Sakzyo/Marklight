@@ -45,6 +45,10 @@ Switch to Japanese Romaji.
 17. Cut, copy, and paste in the preview with real content, including from Safari.
 18. Does it look stable while typing quickly, with no flicker? (Spike 4 couldn't check this by eye.)
 
+## Results
+
+2026-11-04, the owner: every step passed except 13, where the last character in a line and an empty line couldn't be deleted. Fixed; step 13 is awaiting a retest.
+
 ## Report back
 
 Tell me the step numbers that went wrong and what you saw. Copying the terminal output helps. Anything about how it felt is useful too.

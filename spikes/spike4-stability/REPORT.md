@@ -77,7 +77,7 @@ Both change approved contracts, so they're proposals until the Coordinator agree
 
 ## Not verified
 
-- **Actual painting.** "No flicker" rests on no block node being replaced, not on watching frames. The test window is invisible, and it needs a human look in a real window.
+- **Painting, by measurement.** "No flicker" rests on no block node being replaced, not on watching frames. The owner's manual test (Spike 5, step 18) reported no problem by eye.
 - **Real keyboard timing, IME during a patch,** and how a real active window behaves. Spike 5 covers composition.
 - **Remote updates while an image or a long code block loads,** which can change layout after the anchor is restored.
 - **Scroll anchoring when the top visible block is the one that changed.** It anchors to the block's top, so text inside a tall block could still shift.

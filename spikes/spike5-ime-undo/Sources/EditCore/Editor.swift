@@ -81,6 +81,8 @@ public final class Editor {
     /// no empty paragraphs, so this is view state, never document text.
     public private(set) var pending: Int?
     var pendingOverride: Int?
+    /// Backspace took the last text of a block: text going away is the point.
+    var removedOnPurpose = false
     /// One undo step: everything between two presses of Cmd-Z.
     struct Step {
         enum Kind { case typing, deleting, other }
@@ -128,6 +130,7 @@ public final class Editor {
         let wasPending = pending
         pending = nil
         pendingOverride = nil
+        removedOnPurpose = false
         path = .noop
         note = ""
         reparses = 0
@@ -188,7 +191,7 @@ public final class Editor {
         func words(_ d: DocModel) -> String {
             d.root.allLeaves().map { Editor.plain($0.atoms) }.joined().filter { !$0.isWhitespace }
         }
-        if keepsText, words(old) != words(doc) { throw Refusal("edit would lose text") }
+        if keepsText, !removedOnPurpose, words(old) != words(doc) { throw Refusal("edit would lose text") }
     }
 
     private func record(_ patch: Patch) {
@@ -631,8 +634,15 @@ public final class Editor {
     }
 
     private func removeAtoms(_ target: Block, _ i: Int, _ j: Int) throws {
-        let rest = Array(target.atoms[..<i]) + Array(target.atoms[j...])
+        func isBreak(_ a: Atom) -> Bool { a.kind == .softBreak || a.kind == .hardBreak }
+        var head = Array(target.atoms[..<i])
+        var tail = Array(target.atoms[j...])
+        // A line break can't start or end a paragraph, so it goes with the line.
+        if tail.isEmpty { while let last = head.last, isBreak(last) { head.removeLast() } }
+        if head.isEmpty { while let first = tail.first, isBreak(first) { tail.removeFirst() } }
+        let rest = head + tail
         if rest.isEmpty, target.kind == .paragraph {
+            removedOnPurpose = true
             // A paragraph with no text can't exist in Markdown.
             let at = target.content.lowerBound
             commit(replacing(target.content, with: []), caret: at)
@@ -640,7 +650,7 @@ public final class Editor {
             path = .block
             return
         }
-        try editLeaf(target, rest, caret: i)
+        try editLeaf(target, rest, caret: head.count)
     }
 
     private func graphemes(_ atoms: [Atom]) -> [Range<Int>] {

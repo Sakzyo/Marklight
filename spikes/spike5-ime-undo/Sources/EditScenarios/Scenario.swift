@@ -67,4 +67,4 @@ public func apply(_ action: Action, _ editor: Editor, _ selection: inout Range<I
     }
 }
 
-public let allScenarios: [Scenario] = typing + deleting + enter + lists + quotes + formatting + headings + pasting + tables + preservation + spike1Bugs + codeBlocks + fuzzFound
+public let allScenarios: [Scenario] = typing + deleting + enter + lists + quotes + formatting + headings + pasting + tables + preservation + spike1Bugs + codeBlocks + fuzzFound + emptyLines

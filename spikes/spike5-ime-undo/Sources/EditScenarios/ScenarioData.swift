@@ -154,6 +154,27 @@ let tables: [Scenario] = [
     .init("deletion across cells is refused", "| ⟦a | b⟧ |\n|---|---|\n", [.deleteSelection], "| ‸a | b |\n|---|---|\n", "t[r[c[a],c[b]]]"),
 ]
 
+/// Found by a person, in the Spike 5 manual test: Backspace on the only text in a
+/// block, and on the empty line left behind.
+let emptyLines: [Scenario] = [
+    .init("backspace the last character of a paragraph", "one\n\nb‸\n\nthree\n", [.backspace], "one\n\n‸\n\nthree\n", "p[one],p[three]"),
+    .init("backspace the last character then the empty line", "one\n\nb‸\n\nthree\n", [.backspace, .backspace], "one‸\n\nthree\n", "p[one],p[three]"),
+    .init("forward delete the last character of a paragraph", "one\n\n‸b\n\nthree\n", [.forwardDelete], "one\n\n‸\n\nthree\n", "p[one],p[three]"),
+    .init("backspace the only paragraph", "b‸\n", [.backspace], "‸\n", ""),
+    .init("backspace an emoji that is the whole paragraph", "a\n\n👍🏽‸\n", [.backspace], "a\n\n‸\n", "p[a]"),
+    .init("backspace the last character of a list item", "- a\n- b‸\n", [.backspace], "- a\n- ‸\n", "ul[li[p[a]],li[]]"),
+    .init("backspace a list item's text then the item", "- a\n- b‸\n", [.backspace, .backspace], "- a\n\n‸\n", "ul[li[p[a]]]"),
+    .init("backspace the last character in a quote", "> a\n>\n> b‸\n", [.backspace], "> a\n>\n> ‸\n", "q[p[a]]"),
+    .init("backspace the only character of a last line", "a\nb‸\n", [.backspace], "a‸\n", "p[a]"),
+    .init("forward delete the only character of a first line", "‸a\nb\n", [.forwardDelete], "‸b\n", "p[b]"),
+    .init("backspace a last line after a hard break", "a\\\nb‸\n", [.backspace], "a‸\n", "p[a]"),
+    .init("enter then backspace removes the empty line", "a‸\n", [.enter, .backspace], "a‸\n", "p[a]"),
+    .init("enter between paragraphs then backspace", "a‸\n\nb\n", [.enter, .backspace], "a‸\n\nb\n", "p[a],p[b]"),
+    .init("a second enter on an empty line adds nothing", "a‸\n", [.enter, .enter, .backspace], "a‸\n", "p[a]"),
+    .init("type on a new line, delete it all, delete the line", "a‸\n", [.enter, .type("xy"), .backspace, .backspace, .backspace], "a‸\n", "p[a]"),
+    .init("delete a line's text then type again", "a‸\n", [.enter, .type("x"), .backspace, .type("y")], "a\n\ny‸\n", "p[a],p[y]"),
+]
+
 /// Found by the fuzzer.
 let fuzzFound: [Scenario] = [
     .init("backspace at a heading right above text", "## ‸T\nbody\n", [.backspace], "‸T\n\nbody\n", "p[T],p[body]"),
