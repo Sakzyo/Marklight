@@ -53,6 +53,19 @@ private func unpack(_ marked: String) -> (text: String, selection: [Int]) {
     """, ["start": selection[0], "end": selection[1]])
 }
 
+/// The test process is never the active app. Give the real Edit menu the
+/// responder Cocoa would target in the app's key window.
+@MainActor private func sourceUndoKey(_ h: PreviewHarness) throws {
+    h.window.makeFirstResponder(h.textView)
+    let menu = try #require(MainMenu.make().items.compactMap(\.submenu).first { $0.title == "Edit" })
+    let undo = try #require(menu.items.first { $0.action == #selector(SourceTextView.undo(_:)) })
+    undo.target = h.textView
+    let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: h.window.windowNumber, context: nil,
+        characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
+    try #require(menu.performKeyEquivalent(with: event))
+}
+
 /// Waiting on updater.isCurrent alone can succeed before WebKit sends its key.
 @MainActor private func waitForAck(_ h: PreviewHarness, _ expected: Int) async throws {
     let until = Date().addingTimeInterval(4)
@@ -216,6 +229,15 @@ extension PreviewSuites {
                 #expect(h.doc.buffer.units == Array(text.utf16))
                 try await checkFresh(h)
             }
+            // A valid caret cannot legitimize a forged target that splits the
+            // rocket. Treating a failed target lookup as nil would insert at 0.
+            _ = try await h.js("""
+            window.webkit.messageHandlers.marklight.postMessage({type:'input', inputType:'insertReplacementText', v,
+                start:0, end:0, target:[2,2], targetV:v, data:'forged', composed:false, range:null})
+            """, ["v": h.doc.buffer.version])
+            #expect(await pump(until: { beeps == offsets.count + 1 }, timeout: 1))
+            #expect(h.doc.buffer.units == Array(text.utf16))
+            try await checkFresh(h)
         }
 
         @Test("Backspace on focusable raw HTML cannot use an old editable caret")
@@ -479,23 +501,54 @@ extension PreviewSuites {
             #expect(h.pane.updater.pending == nil)
             try await checkFresh(h)
 
-            // The test process is never the active app. Give the real Edit menu
-            // the responder Cocoa would target in the app's key window.
-            h.window.makeFirstResponder(h.textView)
-            let menu = try #require(MainMenu.make().items.compactMap(\.submenu).first { $0.title == "Edit" })
-            let undo = try #require(menu.items.first { $0.action == #selector(SourceTextView.undo(_:)) })
-            undo.target = h.textView
             for expected in ["aXb\r\n", "ab\r\n"] {
-                let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: h.window.windowNumber, context: nil,
-                    characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
-                #expect(menu.performKeyEquivalent(with: event))
+                try sourceUndoKey(h)
                 #expect(await pump(until: { h.doc.buffer.text == expected }))
                 try await h.settle()
                 try await checkFresh(h)
             }
             #expect(h.textView.selectedRange() == NSRange(location: 1, length: 0))
             #expect(h.doc.buffer.serialized() == Data("ab\r\n".utf8))
+        }
+
+        @Test("Both panes restore a real pending paragraph when undoing and redoing")
+        func pendingHistory() async throws {
+            let h = try PreviewHarness(text: "top\n\na\n\nend", windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            try await beginEditing(h, at: [6, 6])
+            key(h, "\u{7f}", code: 51)
+            try await waitForAck(h, 1)
+            #expect(h.pane.updater.pending == 5)
+            try await checkFresh(h, pending: 5)
+            key(h, "x")
+            try await waitForAck(h, 2)
+            #expect(h.doc.buffer.text == "top\n\nx\n\nend")
+            try await checkFresh(h)
+            try sourceUndoKey(h)
+            try await h.settle()
+            #expect(h.pane.updater.pending == 5)
+            #expect(h.textView.selectedRange() == NSRange(location: 5, length: 0))
+            try await checkFresh(h, pending: 5)
+            h.window.makeFirstResponder(h.webView)
+            _ = try await h.js("document.querySelector('#doc').focus(); marklight.select(5,5)")
+            key(h, "y")
+            try await waitForAck(h, 3)
+            #expect(h.doc.buffer.text == "top\n\ny\n\nend")
+            key(h, "z", code: 6, flags: .command)
+            try await waitForAck(h, 4)
+            #expect(try await h.js("return marklight.selection()") as? [Int] == [5, 5])
+            try await checkFresh(h, pending: 5)
+            key(h, "Z", code: 6, flags: [.command, .shift])
+            try await waitForAck(h, 5)
+            #expect(h.doc.buffer.text == "top\n\ny\n\nend")
+            try await checkFresh(h)
+            for pending in [5, nil] as [Int?] {
+                try sourceUndoKey(h)
+                try await h.settle()
+                #expect(h.pane.updater.pending == pending)
+                try await checkFresh(h, pending: pending)
+            }
+            #expect(h.doc.buffer.serialized() == Data("top\n\na\n\nend".utf8))
         }
 
         @Test("A rendered edit carries the source caret without scrolling its viewport")
