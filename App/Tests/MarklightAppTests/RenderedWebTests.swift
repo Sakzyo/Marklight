@@ -501,6 +501,25 @@ extension PreviewSuites {
             try await checkFresh(h)
         }
 
+        @Test("Refocusing the preview restores its caret across a source edit above it")
+        func focusRoundTrip() async throws {
+            let h = try PreviewHarness(text: "top\n\na🚀bc", windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            try await beginEditing(h, at: [8, 8])
+            h.window.makeFirstResponder(h.textView)
+            h.textView.setSelectedRange(NSRange(location: 0, length: 0))
+            key(h, "P")
+            #expect(await pump(until: { h.doc.buffer.text == "Ptop\n\na🚀bc" }))
+            try await h.settle()
+            // Tab/focus returns to the web view; there is no click or explicit
+            // marklight.select to put its selection back for it.
+            h.window.makeFirstResponder(h.webView)
+            key(h, "Y")
+            try await waitForAck(h, 1)
+            #expect(h.doc.buffer.text == "Ptop\n\na🚀Ybc")
+            try await checkFresh(h)
+        }
+
         @Test("The pane receiving Cmd-Z gets the selection in a mixed editing session")
         func mixedUndo() async throws {
             let h = try PreviewHarness(text: "ab\r\n", windowClass: RenderedKeyWindow.self)
