@@ -140,6 +140,16 @@
 
   function purify(html) { return globalThis.DOMPurify.sanitize(html, purifyConfig); }
 
+  // Offsets are trusted input to Swift, so raw HTML from the document can't carry them.
+  function disarm() {
+    for (const block of root.querySelectorAll('[data-raw]')) {
+      for (const el of block.querySelectorAll('*')) {
+        for (const a of ['data-src', 'data-run', 'data-atomic', 'data-caret', 'contenteditable']) el.removeAttribute(a);
+        if (el.matches('input')) el.setAttribute('disabled', '');
+      }
+    }
+  }
+
   root.addEventListener('paste', e => {
     e.preventDefault();
     const sel = selection();
@@ -180,6 +190,7 @@
   globalThis.marklight = {
     update(html, start, end) {
       root.innerHTML = purify(html);
+      disarm();
       root.focus();
       select(start, end);
     },
@@ -190,6 +201,18 @@
       if (!box) return null;
       const r = box.getBoundingClientRect();
       return [r.left + r.width / 2, r.top + r.height / 2];
+    },
+    rectAt(offset) {
+      const [node, at] = toDOM(offset);
+      const r = document.createRange();
+      r.setStart(node, at);
+      r.setEnd(node, at + 1);
+      const box = r.getBoundingClientRect();
+      return [box.left + 1, box.top + box.height / 2];
+    },
+    selectAll() {
+      const s = getSelection();
+      s.selectAllChildren(root);
     },
     paste(plain, html) {
       const d = new DataTransfer();

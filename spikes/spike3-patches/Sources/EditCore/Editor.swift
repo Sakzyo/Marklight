@@ -93,6 +93,7 @@ public final class Editor {
     @discardableResult
     public func perform(_ command: Command) -> Outcome {
         let before = units
+        let beforeDoc = doc
         let wasPending = pending
         pending = nil
         pendingOverride = nil
@@ -102,6 +103,9 @@ public final class Editor {
         do {
             try run(command, wasPending: wasPending)
             pending = pendingOverride
+            if path == .block, units != before {
+                try verifyBlockEdit(beforeDoc, before, command)
+            }
         } catch let error as Refusal {
             path = .refused
             note = error.reason
@@ -119,6 +123,41 @@ public final class Editor {
                             replacement: Array(before[patch.range]), origin: .command)
         undoStack.append(inverse)
         return Outcome(patch: patch, caret: caret, path: path, note: note, reparses: reparses)
+    }
+
+    /// Block edits rewrite source directly, so check them the same way leaf edits
+    /// are checked: everything outside the patch parses as before, and nothing
+    /// that should survive went missing.
+    private func verifyBlockEdit(_ old: DocModel, _ before: [UInt16], _ command: Command) throws {
+        let patch = Patch.minimal(from: before, to: units, origin: .rendered)
+        let a = old.root.children, b = doc.root.children
+        // Diffing can slide an insert past a newline, so a block only counts as
+        // outside the patch if real separation lies between them.
+        func separated(_ gap: Range<Int>) -> Bool {
+            let text = before[gap]
+            let breaks = text.filter { $0 == 0x0A }.count + text.filter { $0 == 0x0D }.count - zip(text, text.dropFirst()).filter { $0 == 0x0D && $1 == 0x0A }.count
+            return breaks >= 2 || text.contains { !$0.isLineBreak && !$0.isSpaceOrTab }
+        }
+        let head = a.prefix { $0.range.upperBound < patch.range.lowerBound && separated($0.range.upperBound..<patch.range.lowerBound) }
+        for (i, block) in head.enumerated() {
+            guard i < b.count, Outline.of(single: block) == Outline.of(single: b[i]) else { throw Refusal("edit would change an earlier block") }
+        }
+        let tail = a.reversed().prefix { $0.range.lowerBound > patch.range.upperBound && separated(patch.range.upperBound..<$0.range.lowerBound) }
+        for (i, block) in tail.enumerated() {
+            guard i < b.count, Outline.of(single: block) == Outline.of(single: b[b.count - 1 - i]) else { throw Refusal("edit would change a later block") }
+        }
+        func unanchored(_ d: DocModel) -> Int { d.root.allLeaves().filter { $0.opaque }.count }
+        guard unanchored(doc) <= unanchored(old) else { throw Refusal("edit would leave a block that can't be mapped") }
+        var keepsText = false
+        switch command {
+        case .enter(let r): keepsText = r.isEmpty
+        case .delete(let r, _): keepsText = r.isEmpty
+        default: break
+        }
+        func words(_ d: DocModel) -> String {
+            d.root.allLeaves().map { Editor.plain($0.atoms) }.joined().filter { !$0.isWhitespace }
+        }
+        if keepsText, words(old) != words(doc) { throw Refusal("edit would lose text") }
     }
 
     public func undo() {
@@ -281,10 +320,11 @@ public final class Editor {
         var escape: WriteOptions.Escape = .none
         var reescape = false
         var stars = WriteOptions.Stars.none
+        var widen = false
     }
 
     static let attempts = [
-        Attempt(), Attempt(escape: .inline), Attempt(escape: .block),
+        Attempt(), Attempt(escape: .inline), Attempt(widen: true), Attempt(escape: .block),
         Attempt(escape: .inline, stars: .newMarks), Attempt(escape: .inline, stars: .all),
         Attempt(escape: .block, reescape: true),
     ]
@@ -307,7 +347,10 @@ public final class Editor {
         var options = WriteOptions()
         options.eol = eol(at: leaf.content.lowerBound)
         options.linePrefix = linePrefix(leaf)
+        options.explicitLinks = changedLinks(leaf.atoms, atoms)
+        if case .cell = leaf.kind { options.inCell = true }
         for attempt in Editor.attempts {
+            options.widenCode = attempt.widen
             options.escape = attempt.escape
             options.reescapeExisting = attempt.reescape
             options.stars = attempt.stars
@@ -323,6 +366,19 @@ public final class Editor {
             }
         }
         throw Refusal("no serialization reproduces the expected structure")
+    }
+
+    /// Links whose text differs after the edit.
+    private func changedLinks(_ old: [Atom], _ new: [Atom]) -> Set<Mark> {
+        func texts(_ atoms: [Atom]) -> [Mark: [UInt16]] {
+            var out: [Mark: [UInt16]] = [:]
+            for a in atoms {
+                for m in a.marks where m.explicitClose != nil { out[m, default: []].append(a.unit) }
+            }
+            return out
+        }
+        let a = texts(old), b = texts(new)
+        return Set(a.keys.filter { a[$0] != b[$0] })
     }
 
     func insert(_ text: String, _ range: Range<Int>, pending: Int?) throws {
@@ -344,7 +400,15 @@ public final class Editor {
         }
         let marks = !range.isEmpty && i < target.atoms.count ? target.atoms[i].marks : self.marks(at: range.lowerBound, in: target, index: i)
         let new = textAtoms(text, marks: marks)
-        try editLeaf(target, Array(target.atoms[..<i]) + new + Array(target.atoms[j...]), caret: i + new.count)
+        do {
+            try editLeaf(target, Array(target.atoms[..<i]) + new + Array(target.atoms[j...]), caret: i + new.count)
+        } catch let refusal as Refusal {
+            // `**When:**x` can't close: a delimiter after punctuation needs a space or
+            // punctuation next. Better to extend the mark than to drop the keystroke.
+            guard range.isEmpty, marks.isEmpty, i > 0, !target.atoms[i - 1].marks.isEmpty else { throw refusal }
+            let extended = textAtoms(text, marks: target.atoms[i - 1].marks)
+            try editLeaf(target, Array(target.atoms[..<i]) + extended + Array(target.atoms[j...]), caret: i + extended.count)
+        }
     }
 
     /// Typing where only a caret exists: a pending paragraph or an empty list item.
@@ -369,6 +433,8 @@ public final class Editor {
         throw Refusal("text would not parse as a paragraph here")
     }
 
+    public static func plainText(_ leaf: Block) -> String { plain(leaf.atoms) }
+
     static func plain(_ atoms: [Atom]) -> String {
         String(decoding: atoms.filter { $0.kind == .text || $0.kind == .ignored }.map { $0.unit }, as: UTF16.self)
     }
@@ -380,6 +446,12 @@ public final class Editor {
         let same = parsed.root.allLeaves().count == doc.root.allLeaves().count
         let reparsed = parsed.root.allLeaves().first { $0.range.lowerBound == code.range.lowerBound }
         guard same, let reparsed, case .code = reparsed.kind else { throw Refusal("edit would break the code fence") }
+        // Every other character has to come through, with this edit's change.
+        func visible(_ s: some Sequence<UInt16>) -> Int { s.filter { $0 != 0x20 && $0 != 0x09 && !$0.isLineBreak }.count }
+        func count(_ b: Block) -> Int { visible(b.atoms.filter { $0.kind == .text }.map { $0.unit }) }
+        func total(_ d: DocModel) -> Int { d.root.allLeaves().reduce(0) { $0 + count($1) } }
+        let delta = visible(text.utf16) - visible(units[range])
+        guard total(parsed) == total(doc) + delta, count(reparsed) == count(code) + delta else { throw Refusal("edit would break the code block") }
         commit(candidate, caret: range.lowerBound + text.utf16.count, doc: parsed)
         path = .leaf
     }

@@ -22,6 +22,9 @@ public struct Mark: Hashable {
     public let id: Int
     public let open: [UInt16]
     public let close: [UInt16]
+    /// For `[shortcut]` and `[collapsed][]` links: what keeps the target when the
+    /// text, which doubles as the lookup label, changes.
+    public var explicitClose: [UInt16]? = nil
 
     /// Marks made by an edit, rather than parsed, have ids from here up.
     static let firstNewID = 1_000_000

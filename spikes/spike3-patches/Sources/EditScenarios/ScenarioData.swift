@@ -154,6 +154,34 @@ let tables: [Scenario] = [
     .init("deletion across cells is refused", "| ⟦a | b⟧ |\n|---|---|\n", [.deleteSelection], "| ‸a | b |\n|---|---|\n", "t[r[c[a],c[b]]]"),
 ]
 
+/// Found by the fuzzer.
+let fuzzFound: [Scenario] = [
+    .init("backspace at a heading right above text", "## ‸T\nbody\n", [.backspace], "‸T\n\nbody\n", "p[T],p[body]"),
+    .init("backspace at a heading right below HTML", "<a></a>\n## ‸T\n", [.backspace], "<a></a>\n\n‸T\n", "p[▣▣],p[T]"),
+    .init("enter in a setext heading above text", "Li‸cense\n---\nbody\n", [.enter], "Li\n---\n\n‸cense\n\nbody\n", "h2[Li],p[cense],p[body]"),
+    .init("enter inside an autolink", "a <https://e.co‸m> b\n", [.enter], "a [https://e.co](https://e.com)\n\n[‸m](https://e.com) b\n", "p[a <a=https://e.com>https://e.co</a>],p[<a=https://e.com>m</a> b]"),
+    .init("enter inside a shortcut link", "a [li‸nk]\n\n[link]: /u\n", [.enter], "a [li](/u)\n\n[‸nk](/u)\n\n[link]: /u\n", "p[a <a=/u>li</a>],p[<a=/u>nk</a>]"),
+    .init("enter inside a reference link", "[li‸nk][r]\n\n[r]: /u\n", [.enter], "[li][r]\n\n[‸nk][r]\n\n[r]: /u\n", "p[<a=/u>li</a>],p[<a=/u>nk</a>]"),
+    .init("merge multi-line paragraph into heading", "# a\n\n‸b\nc\n", [.backspace], "# a‸b c\n", "h1[ab c]"),
+    .init("merge into a heading with closing hashes", "# a #\n\n‸b\n", [.backspace], "# a‸b #\n", "h1[ab]"),
+    .init("merge into a setext heading", "a\n---\n\n‸b\n", [.backspace], "a‸b\n---\n", "h2[ab]"),
+    .init("type in an autolink", "<https://e.co‸m>\n", [.type("x")], "<https://e.cox‸m>\n", "p[<a=auto>https://e.coxm</a>]"),
+    .init("type in a shortcut link", "[li‸nk]\n\n[link]: /u\n", [.type("x")], "[lix‸nk][link]\n\n[link]: /u\n", "p[<a=/u>lixnk</a>]"),
+    .init("delete in a collapsed link", "[lin‸k][]\n\n[link]: /u\n", [.backspace], "[li‸k][link]\n\n[link]: /u\n", "p[<a=/u>lik</a>]"),
+    .init("other shortcut links stay", "[a] [li‸nk]\n\n[a]: /x\n[link]: /u\n", [.type("x")], "[a] [lix‸nk][link]\n\n[a]: /x\n[link]: /u\n", "p[<a=/x>a</a> <a=/u>lixnk</a>]"),
+    .init("type a backtick inside code", "a `b‸c` d\n", [.type("`")], "a ``b`‸c`` d\n", "p[a <c>b`c</c> d]"),
+    .init("type a pipe inside code in a cell", "| a |\n|---|\n| `b‸` |\n", [.type("|")], "| a |\n|---|\n| `b\\|‸` |\n", "t[r[c[a]],r[c[<c>b|</c>]]]"),
+    .init("join two badge lines", "[![a](x)](y)\n[‸![b](z)](w)\n", [.backspace], "[![a](x)‸](y)[![b](z)](w)\n", "p[<a=y>▣</a><a=w>▣</a>]"),
+    .init("letter after bold ending in punctuation extends the bold", "**When:**‸ now\n", [.type("x")], "**When:x‸** now\n", "p[<b>When:x</b> now]"),
+    .init("enter in an indented code block", "a\n\n    <v>‸>\n", [.enter], "a\n\n    <v>\n    ‸>\n", "p[a],code()[<v>⏎>]"),
+    .init("enter must not turn the rest of a paragraph into a rule", "Foo‸\n    ---\n", [.enter], "Foo‸\n    ---\n", "p[Foo⏎---]"),
+    .init("lift the first item of a list right below text", "para\n- ‸a\n", [.backspace], "para\n\n‸a\n", "p[para],p[a]"),
+    .init("lift an item whose text starts below its marker", "-\n  ‸foo\n- b\n", [.backspace], "‸foo\n\n- b\n", "p[foo],ul[li[p[b]]]"),
+    .init("paste lines into an indented code block", "a\n\n    fo‸o\n", [.pastePlain("x\ny")], "a\n\n    fox\n    y‸o\n", "p[a],code()[fox⏎yo]"),
+    .init("type a space in a bare URL", "see https://e.co‸m now\n", [.type(" ")], "see https://e.co ‸m now\n", "p[see https://e.co m now]"),
+    .init("typing makes a bare URL", "see www.e.co‸\n", [.type("m")], "see www.e.com‸\n", "p[see www.e.com]"),
+]
+
 let preservation: [Scenario] = [
     .init("CRLF: type keeps endings", "a‸b\r\n\r\nc\r\n", [.type("x")], "ax‸b\r\n\r\nc\r\n", "p[axb],p[c]"),
     .init("CRLF: enter writes CRLF", "a‸b\r\n\r\nc\r\n", [.enter], "a\r\n\r\n‸b\r\n\r\nc\r\n", "p[a],p[b],p[c]"),
@@ -164,7 +192,7 @@ let preservation: [Scenario] = [
     .init("delimiter order stays", "**_a_** _**b**_ c‸\n", [.type("d")], "**_a_** _**b**_ cd‸\n", "p[<b><i>a</i></b> <i><b>b</b></i> cd]"),
     .init("two-space hard break stays", "a  \nb‸\n", [.type("c")], "a  \nbc‸\n", "p[a⇩bc]"),
     .init("reference link stays", "[a][r]‸ b\n\n[r]: /u\n", [.type("x")], "[a][r]x‸ b\n\n[r]: /u\n", "p[<a=/u>a</a>x b]"),
-    .init("autolink stays", "<https://e.com> a‸\n", [.type("b")], "<https://e.com> ab‸\n", "p[<a=https://e.com>https://e.com</a> ab]"),
+    .init("autolink stays", "<https://e.com> a‸\n", [.type("b")], "<https://e.com> ab‸\n", "p[<a=auto>https://e.com</a> ab]"),
     .init("image stays", "![alt](i.png \"t\") a‸\n", [.type("b")], "![alt](i.png \"t\") ab‸\n", "p[▣ ab]"),
     .init("inline HTML stays", "a <kbd>b</kbd> c‸\n", [.type("d")], "a <kbd>b</kbd> cd‸\n", "p[a ▣b▣ cd]"),
     .init("other blocks stay untouched", "*   a\n\n1) b\n\nx‸\n\n***\n", [.type("y")], "*   a\n\n1) b\n\nxy‸\n\n***\n", "ul[li[p[a]]],ol1[li[p[b]]],p[xy],hr"),

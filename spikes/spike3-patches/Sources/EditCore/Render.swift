@@ -77,7 +77,7 @@ private struct Render {
             out += "</code></pre>"
         case .html:
             let raw = String(decoding: units[b.range], as: UTF16.self)
-            out += "<div \(src(b.range)) contenteditable=\"false\">\(raw)</div>"
+            out += "<div \(src(b.range)) contenteditable=\"false\" data-raw>\(raw)</div>"
         case .rule:
             out += "<hr \(src(b.range)) contenteditable=\"false\">"
         case .table:

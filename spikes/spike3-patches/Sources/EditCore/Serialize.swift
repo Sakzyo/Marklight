@@ -9,6 +9,12 @@ public struct WriteOptions {
     public var linePrefix: [UInt16] = []
     /// `_` can't open or close mid-word. Stars for new marks, or for all of them.
     public var stars = Stars.none
+    /// Links whose text changed: `[shortcut]` is written `[text][shortcut]`.
+    public var explicitLinks: Set<Mark> = []
+    /// Fences for code that now contains backticks.
+    public var widenCode = false
+    /// In a table cell a pipe needs its backslash even inside code.
+    public var inCell = false
     public enum Stars { case none, newMarks, all }
     public enum Escape { case none, inline, block }
     public init() {}
@@ -49,8 +55,15 @@ public enum Serializer {
         var out: [UInt16] = []
         var stack: [Mark] = []
         var i = 0
-        func opening(_ m: Mark) -> [UInt16] { starred(m, m.open, options) }
-        func closing(_ m: Mark) -> [UInt16] { starred(m, m.close, options) }
+        func opening(_ m: Mark) -> [UInt16] {
+            if options.widenCode, m.kind == .code, let f = fence(m, atoms) { return f.open }
+            return starred(m, m.open, options)
+        }
+        func closing(_ m: Mark) -> [UInt16] {
+            if options.widenCode, m.kind == .code, let f = fence(m, atoms) { return f.close }
+            if options.explicitLinks.contains(m), let explicit = m.explicitClose { return explicit }
+            return starred(m, m.close, options)
+        }
         while i < atoms.count {
             let atom = atoms[i]
             var common = 0
@@ -79,6 +92,7 @@ public enum Serializer {
             default:
                 let inCode = atom.marks.contains { $0.kind == .code }
                 if !inCode, reescape || needsEscape(atoms, i, options.escape) { out.append(0x5C) }
+                else if inCode, options.inCell, atom.unit == 0x7C { out.append(0x5C) }
                 out.append(atom.unit)
             }
             i += 1
@@ -87,6 +101,20 @@ public enum Serializer {
         if atoms.isEmpty { caretOffset?.pointee = 0 }
         while let m = stack.popLast() { out += closing(m) }
         return out
+    }
+
+    /// A fence longer than any backtick run inside, padded if the code touches it.
+    private static func fence(_ m: Mark, _ atoms: [Atom]) -> (open: [UInt16], close: [UInt16])? {
+        let text = atoms.filter { $0.marks.contains(m) }.map { $0.unit }
+        var longest = 0, run = 0
+        for u in text {
+            run = u == 0x60 ? run + 1 : 0
+            longest = max(longest, run)
+        }
+        guard longest > 0, let first = text.first, let last = text.last else { return nil }
+        let ticks = [UInt16](repeating: 0x60, count: longest + 1)
+        let pad: [UInt16] = first == 0x60 || last == 0x60 ? [0x20] : []
+        return (ticks + pad, pad + ticks)
     }
 
     private static func starred(_ m: Mark, _ delim: [UInt16], _ options: WriteOptions) -> [UInt16] {
@@ -118,6 +146,8 @@ public enum Outline {
         describe(root, old, atoms)
     }
 
+    public static func of(single block: Block) -> String { describe(block, nil, []) }
+
     private static func describe(_ b: Block, _ old: Block?, _ atoms: [Atom]) -> String {
         func kids() -> String { b.children.map { describe($0, old, atoms) }.joined(separator: ",") }
         func text() -> String { inline(b === old ? atoms : b.atoms, opaque: b.opaque, b: b) }
@@ -147,20 +177,24 @@ public enum Outline {
             while let last = trimmed.last, edge(last) { trimmed.removeLast() }
             while let first = trimmed.first, edge(first) { trimmed.removeFirst() }
         }
-        var units: [UInt16] = []
-        var stack: [Mark.Kind] = []
-        func openName(_ k: Mark.Kind) -> String {
-            if case .link(let d) = k { return "a=\(d)" }
-            return k.name
+        /// Bare URLs are linkified from their text, so they aren't structure:
+        /// typing can start, extend, or end one. An autolink's target is its text.
+        func tag(_ m: Mark) -> String? {
+            guard case .link(let dest) = m.kind else { return m.kind.name }
+            if m.open.isEmpty { return nil }
+            return m.open == [0x3C] ? "a=auto" : "a=\(dest)"
         }
+        var units: [UInt16] = []
+        var stack: [String] = []
         for a in trimmed {
-            let kinds = a.marks.map { $0.kind }
+            let tags = a.marks.compactMap(tag)
             var common = 0
-            while common < stack.count, common < kinds.count, stack[common] == kinds[common] { common += 1 }
-            while stack.count > common { units += Array("</\(stack.removeLast().name)>".utf16) }
-            for k in kinds[common...] {
-                units += Array("<\(openName(k))>".utf16)
-                stack.append(k)
+            while common < stack.count, common < tags.count, stack[common] == tags[common] { common += 1 }
+            func close() { units += Array("</\(stack.removeLast().prefix { $0 != "=" })>".utf16) }
+            while stack.count > common { close() }
+            for t in tags[common...] {
+                units += Array("<\(t)>".utf16)
+                stack.append(t)
             }
             switch a.kind {
             case .softBreak: units += Array("⏎".utf16)
@@ -169,7 +203,7 @@ public enum Outline {
             case .text, .ignored: units.append(a.unit)
             }
         }
-        while let k = stack.popLast() { units += Array("</\(k.name)>".utf16) }
+        while let t = stack.popLast() { units += Array("</\(t.prefix { $0 != "=" })>".utf16) }
         return String(decoding: units, as: UTF16.self)
     }
 }

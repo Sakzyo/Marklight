@@ -40,7 +40,7 @@ extension Editor {
         guard !target.opaque else { throw Refusal("leaf could not be anchored") }
         switch target.kind {
         case .code:
-            try editCode(target, offset..<offset, String(decoding: eol(at: offset) + linePrefix(target), as: UTF16.self))
+            try editCode(target, offset..<offset, String(decoding: eol(at: offset) + codeIndent(target, offset), as: UTF16.self))
         case .cell:
             throw Refusal("Enter does nothing in a table cell")
         case .heading:
@@ -50,13 +50,19 @@ extension Editor {
         }
     }
 
+    /// A code line's own indent, which an indented block depends on.
+    private func codeIndent(_ code: Block, _ offset: Int) -> [UInt16] {
+        let l = lineStart(offset)
+        let first = code.atoms.first { ($0.range?.lowerBound ?? -1) >= l }?.range?.lowerBound
+        return first.map { Array(units[l..<min($0, offset)]) } ?? linePrefix(code)
+    }
+
     private func splitParagraph(_ target: Block, _ offset: Int) throws {
         let i = atomIndex(target, offset)
         if let item = target.parent, case .item = item.kind, item.children.first === target {
             return try splitItem(target, item, i)
         }
-        let left = trimEnd(target.atoms[..<i])
-        let right = trimStart(target.atoms[i...])
+        let (left, right) = linkSafe(trimEnd(target.atoms[..<i]), trimStart(target.atoms[i...]))
         let p = linePrefix(target)
         let e = eol(at: offset)
         let sep = e + blank(p) + e + p
@@ -88,12 +94,52 @@ extension Editor {
             path = .block
             return
         }
-        let leftText = written(left, leaf: target)
-        let rightText = written(right, leaf: target)
+        let (splitLeft, splitRight) = linkSafe(left, right)
+        let leftText = written(splitLeft, leaf: target)
+        let rightText = written(splitRight, leaf: target)
         let head = leftText + suffix + sep
-        commit(replacing(base..<max(target.content.upperBound, target.range.upperBound), with: head + rightText), caret: base + head.count)
+        let end = max(target.content.upperBound, target.range.upperBound)
+        // A heading can sit right on top of text; a paragraph can't.
+        let gap = right.isEmpty || !nextLineHasText(end) ? [] : e + blank(p)
+        commit(replacing(base..<end, with: head + rightText + gap), caret: base + head.count)
         path = .block
         if right.isEmpty { setPending(base + head.count) }
+    }
+
+    func nextLineHasText(_ offset: Int) -> Bool {
+        var i = lineEnd(offset)
+        guard i < units.count else { return false }
+        i += units[i] == 0x0D && units[safe: i + 1] == 0x0A ? 2 : 1
+        return i < units.count && !lineIsBlank(i)
+    }
+
+    func previousLineHasText(_ offset: Int) -> Bool {
+        var i = lineStart(offset)
+        guard i > 0 else { return false }
+        i -= 1
+        if units[i] == 0x0A, i > 0, units[i - 1] == 0x0D { i -= 1 }
+        return !lineIsBlank(lineStart(i))
+    }
+
+    private func lineIsBlank(_ start: Int) -> Bool {
+        units[start..<lineEnd(start)].allSatisfy { $0.isSpaceOrTab || $0 == 0x3E }
+    }
+
+    /// Splitting a link that has no target of its own (an autolink or `[shortcut]`)
+    /// would break both halves, so give each half an explicit target.
+    private func linkSafe(_ left: [Atom], _ right: [Atom]) -> ([Atom], [Atom]) {
+        guard let last = left.last, let first = right.first else { return (left, right) }
+        var l = left, r = right
+        for m in last.marks where first.marks.contains(m) {
+            guard case .link(let dest) = m.kind else { continue }
+            let close = String(decoding: m.close, as: UTF16.self)
+            if m.open == [0x5B], close.count > 2, !close.hasPrefix("][]") { continue } // keeps its own tail
+            nextMark += 1
+            let inline = Mark(kind: m.kind, id: nextMark, open: [0x5B], close: Array("](\(dest))".utf16))
+            for i in l.indices { l[i].marks = l[i].marks.map { $0 == m ? inline : $0 } }
+            for i in r.indices { r[i].marks = r[i].marks.map { $0 == m ? inline : $0 } }
+        }
+        return (l, r)
     }
 
     private func number(of item: Block) -> Int? {
@@ -136,8 +182,7 @@ extension Editor {
 
     private func splitItem(_ target: Block, _ item: Block, _ i: Int) throws {
         guard let list = item.parent, let idx = list.children.firstIndex(where: { $0 === item }) else { throw Refusal("orphan item") }
-        let left = trimEnd(target.atoms[..<i])
-        let right = trimStart(target.atoms[i...])
+        let (left, right) = linkSafe(trimEnd(target.atoms[..<i]), trimStart(target.atoms[i...]))
         let e = eol(at: target.content.lowerBound)
 
         var next: Int? = nil
@@ -280,9 +325,20 @@ extension Editor {
     private func merge(_ a: Block, _ b: Block) throws {
         guard !a.opaque, !b.opaque else { throw Refusal("leaf could not be anchored") }
         let keep = trimEnd(a.atoms[...])
+        var tail = b.atoms
+        var suffix: [UInt16] = []
+        var end = b.content.upperBound
+        if case .heading = b.kind { end = max(end, b.range.upperBound) }
+        if case .heading = a.kind {
+            // A heading is one line (setext aside), and keeps its closing or underline.
+            suffix = Array(units[a.content.upperBound..<max(a.content.upperBound, a.range.upperBound)])
+            for k in tail.indices where tail[k].kind == .softBreak || tail[k].kind == .hardBreak {
+                tail[k] = Atom(kind: .text, unit: 0x20, marks: tail[k].marks)
+            }
+        }
         var at = 0
-        let text = written(keep + b.atoms, caret: keep.count, at: &at, leaf: a)
-        commit(replacing(a.content.lowerBound..<b.content.upperBound, with: text), caret: a.content.lowerBound + at)
+        let text = written(keep + tail, caret: keep.count, at: &at, leaf: a)
+        commit(replacing(a.content.lowerBound..<end, with: text + suffix), caret: a.content.lowerBound + at)
         path = .block
     }
 
@@ -297,7 +353,7 @@ extension Editor {
 
         // De-indent each continuation line.
         var lines: [UInt16] = []
-        var at = lineEnd(item.range.lowerBound)
+        var at = lineEnd(target.content.lowerBound) // the marker can sit on its own line
         lines += units[target.content.lowerBound..<at]
         while at < lastLineEnd {
             var next = at
@@ -328,9 +384,8 @@ extension Editor {
         let e = eol(at: l)
         var new: [UInt16] = Array(units[keep])
         var c = l + keep.count
-        if idx > 0 {
-            new = e + b + e + Array(units[keep])
-            // The item's line follows a list line; add one blank line.
+        if idx > 0 || previousLineHasText(l) {
+            // The line above is text the lifted paragraph would run into.
             new = b + e + Array(units[keep])
             c = l + b.count + e.count + keep.count
         }
@@ -386,10 +441,21 @@ extension Editor {
     private func removeHeading(_ target: Block, caretAt: Int) throws {
         let isATX = target.content.lowerBound > target.range.lowerBound
         let suffixEnd = max(target.content.upperBound, target.range.upperBound)
+        let e = eol(at: target.range.lowerBound)
+        let b = blank(linePrefix(target))
+        // Plain text would run into a neighbouring line that a heading kept apart.
+        let textAfter = nextLineHasText(suffixEnd)
+        let textBefore = previousLineHasText(target.range.lowerBound)
         var u = units
-        u.replaceSubrange(target.content.upperBound..<suffixEnd, with: [])
+        u.replaceSubrange(target.content.upperBound..<suffixEnd, with: textAfter ? e + b : [])
         if isATX { u.replaceSubrange(target.range.lowerBound..<target.content.lowerBound, with: []) }
-        commit(u, caret: caretAt - (target.content.lowerBound - target.range.lowerBound))
+        var c = caretAt - (target.content.lowerBound - target.range.lowerBound)
+        if textBefore {
+            let at = lineStart(target.range.lowerBound)
+            u.replaceSubrange(at..<at, with: b + e)
+            c += b.count + e.count
+        }
+        commit(u, caret: c)
         path = .block
     }
 
@@ -419,8 +485,12 @@ extension Editor {
         let merged = Array(first.atoms[..<i]) + Array(last.atoms[j...])
         var at = 0
         let text = written(merged, caret: i, at: &at, leaf: first)
-        let span = first.content.lowerBound..<last.content.upperBound
-        commit(replacing(span, with: text), caret: span.lowerBound + at)
+        var end = last.content.upperBound
+        if case .heading = last.kind { end = max(end, last.range.upperBound) }
+        var suffix: [UInt16] = []
+        if case .heading = first.kind { suffix = Array(units[first.content.upperBound..<max(first.content.upperBound, first.range.upperBound)]) }
+        let span = first.content.lowerBound..<end
+        commit(replacing(span, with: text + suffix), caret: span.lowerBound + at)
         path = .block
         if merged.isEmpty, first.kind == .paragraph { setPending(span.lowerBound) }
     }
@@ -505,7 +575,7 @@ extension Editor {
             return try insert(paragraphs[0][0], range, pending: pending)
         }
         if case .code = target.kind {
-            let code = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: String(decoding: eol(at: range.lowerBound) + linePrefix(target), as: UTF16.self))
+            let code = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: String(decoding: eol(at: range.lowerBound) + codeIndent(target, range.lowerBound), as: UTF16.self))
             return try editCode(target, range, code)
         }
         let i = atomIndex(target, range.lowerBound)

@@ -267,7 +267,10 @@ struct Anchorer {
             var tail = probe
             tail.c += 1
             tail.skipLinkTail()
-            let mark = makeMark(.link(dest), open: [0x5B], close: slice(textEnd..<tail.c))
+            var mark = makeMark(.link(dest), open: [0x5B], close: slice(textEnd..<tail.c))
+            if tail.c == textEnd + 1 || mark.close == [0x5D, 0x5B, 0x5D] {
+                mark.explicitClose = [0x5D, 0x5B] + slice(start + 1..<textEnd) + [0x5D]
+            }
             let children = try walk(Array(link.children), marks: marks + [mark])
             c = tail.c
             let inline = Inline(kind: .mark(mark), range: start..<c, atoms: first..<atoms.count)
@@ -439,7 +442,11 @@ public final class DocModel {
             if case .cell = block.kind {
                 // Cell text ends before the padding.
             } else if case .heading = block.kind, units[safe: block.range.lowerBound] == 0x23 {
-                // Trailing spaces and closing #s stay outside the content.
+                // Closing #s stay outside the content, but they're part of the
+                // block even when cmark's range stops short of them.
+                var e = lineEnd
+                while e > anchorer.c, units[e - 1].isSpaceOrTab { e -= 1 }
+                block.range = block.range.lowerBound..<max(block.range.upperBound, e)
             } else {
                 anchorer.trailingWhitespace(limit: lineEnd)
             }
