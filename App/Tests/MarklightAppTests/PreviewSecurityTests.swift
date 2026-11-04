@@ -256,12 +256,23 @@ extension PreviewSuites {
             try await h.settle()
             let start = h.webView.url
 
+            _ = try await h.js("""
+            window.linkClicks = [];
+            document.addEventListener('click', e => linkClicks.push([e.target.closest('a')?.textContent, e.metaKey]), true);
+            """)
             for text in ["markdown js link", "attribute breakout", "external link", "mail link", "other markdown file",
                          "raw js link", "raw data link", "raw blank link", "raw markdown link", "missing markdown link", "text file link"] {
+                let oldCount = markdown.count
                 let point = try await h.center(of: "a", text: text)
                 await pump(for: 0.1)
                 await h.click(x: point.x, y: point.y, modifiers: .command)
-                await pump(for: 0.15)
+                if text == "other markdown file" || text == "raw markdown link" {
+                    let routed = await pump(until: { markdown.count > oldCount }, timeout: 2)
+                    let clicks = try await h.js("return JSON.stringify(linkClicks)") as? String ?? ""
+                    #expect(routed && markdown.dropFirst(oldCount) == ["other.md"], "\(text), clicks \(clicks)")
+                } else {
+                    await pump(for: 0.15)
+                }
                 #expect(h.webView.url == start, "\(text) navigated the preview")
             }
 

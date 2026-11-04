@@ -91,7 +91,7 @@ struct PreviewTimingTests {
 
     /// Time each native key from beforeinput until the changed paragraph's text
     /// is present in the DOM. Coalesced messages retire several samples together.
-    private func renderedBurst(bytes: Int, count: Int = 180, controlDelayMS: Int = 0) async throws -> (p95: Double, late: Double) {
+    private func renderedBurst(bytes: Int, count: Int = 180, controlDelayMS: Int = 0) async throws -> (p95: Double, nativeP95: Double, patchP95: Double, late: Double) {
         let text = document(bytes: bytes), source = text as NSString
         let paragraph = source.range(of: "A paragraph", options: [], range: NSRange(location: source.length / 2,
                                                                                      length: source.length - source.length / 2))
@@ -109,13 +109,14 @@ struct PreviewTimingTests {
         p.scrollIntoView({block:'center'});
         const initial = p.textContent.length;
         let seen = 0;
-        const events = [], samples = [];
-        window.keySamples = samples;
+        const events = [], samples = [], completed = [], costs = [];
+        window.keyTiming = {samples, completed, costs};
         root.addEventListener('beforeinput', e => {
             if (e.inputType === 'insertText') events.push(performance.now());
         }, true);
         const patch = marklight.patch;
         marklight.patch = m => {
+            const start = performance.now();
             if (delay) {
                 const end = performance.now() + delay;
                 while (performance.now() < end) {}
@@ -123,7 +124,11 @@ struct PreviewTimingTests {
             patch(m);
             const delivered = p.textContent.length - initial;
             const end = performance.now();
-            while (seen < delivered && seen < events.length) samples.push(end - events[seen++]);
+            costs.push(end - start);
+            while (seen < delivered && seen < events.length) {
+                samples.push(end - events[seen++]);
+                completed.push(performance.timeOrigin + end);
+            }
         };
         """, ["at": at, "delay": controlDelayMS])
         await pump(for: 0.5)
@@ -132,9 +137,11 @@ struct PreviewTimingTests {
         var expected = Array(text.utf16)
         expected.insert(contentsOf: stream.joined().utf16, at: at)
         var next = ProcessInfo.processInfo.systemUptime, maxLate = 0.0
+        var sent: [Double] = []
         for letter in stream {
             _ = await pump(until: { ProcessInfo.processInfo.systemUptime >= next })
             maxLate = max(maxLate, (ProcessInfo.processInfo.systemUptime - next) * 1000)
+            sent.append(Date().timeIntervalSince1970 * 1000)
             key(h, letter, code: UInt16(letters.firstIndex(of: letter)!))
             next += 1.0 / 60
         }
@@ -142,18 +149,22 @@ struct PreviewTimingTests {
         try await h.settle()
         #expect(h.doc.buffer.units == expected)
         #expect(Array(h.textView.string.utf16) == expected)
-        let samples: [Double] = try await h.json("return window.keySamples")
-        try #require(samples.count == count)
-        return (percentile(samples, 0.95), maxLate)
+        let timing: [String: [Double]] = try await h.json("return window.keyTiming")
+        let samples = try #require(timing["samples"]), completed = try #require(timing["completed"])
+        let costs = try #require(timing["costs"])
+        try #require(samples.count == count && completed.count == count && !costs.isEmpty)
+        let fromNativeKey = zip(completed, sent).map { $0 - $1 }
+        return (percentile(samples, 0.95), percentile(fromNativeKey, 0.95), percentile(costs, 0.95), maxLate)
     }
 
     @Test("Rendered keys arrive in order at 60 per second")
     func renderedTyping() async throws {
         for bytes in [4_000, 30_000, 100_000, 850_000] {
-            let (p95, late) = try await renderedBurst(bytes: bytes)
-            print(String(format: "Rendered %d KB, 180 keys: p95 %.2f ms, main late max %.2f ms", bytes / 1000, p95, late))
-            if bytes == 100_000 { #expect(p95 < 20) }
-            if bytes == 850_000 { #expect(p95 < 50) }
+            let r = try await renderedBurst(bytes: bytes)
+            print(String(format: "Rendered %d KB, 180 keys: p95 %.2f ms, native key to DOM p95 %.2f ms, JS patch p95 %.2f ms, main late max %.2f ms",
+                         bytes / 1000, r.p95, r.nativeP95, r.patchP95, r.late))
+            if bytes == 100_000 { #expect(r.p95 < 20) }
+            if bytes == 850_000 { #expect(r.p95 < 50) }
         }
         let slow = try await renderedBurst(bytes: 4_000, count: 16, controlDelayMS: 65)
         print(String(format: "Delayed-patch control p95 %.2f ms", slow.p95))
