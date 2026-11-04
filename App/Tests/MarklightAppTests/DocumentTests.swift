@@ -321,6 +321,75 @@ struct DocumentTests {
         #expect(!doc.isDocumentEdited)
     }
 
+    @Test func anUntitledDocumentSavesAsUTF8() async throws {
+        _ = NSApplication.shared
+        let doc = MarkdownDocument()
+        doc.makeWindowControllers()
+        let view = (doc.windowControllers[0] as! EditorWindowController).editor.textView
+        type("# New", view)
+        view.insertNewline(nil)
+        let url = try makeFolder().appendingPathComponent("new.md")
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            doc.save(to: url, ofType: MarkdownDocument.markdownType, for: .saveAsOperation) { error in
+                if let error { c.resume(throwing: error) } else { c.resume() }
+            }
+        }
+        #expect(try Data(contentsOf: url) == Data("# New\n".utf8))
+        #expect(doc.fileURL == url)
+        #expect(!doc.isDocumentEdited)
+        type("!", view)
+        try Data("# Other\n".utf8).write(to: url, options: .atomic)
+        var prompted = false
+        doc.externalChangePrompt = { _ in prompted = true }
+        #expect(await wait { prompted }) // the watch followed the new name
+    }
+
+    @Test func findBarOpensFromTheMenuAction() throws {
+        let url = try file("needle in a haystack\n", try makeFolder())
+        let (doc, view, editor) = try open(url)
+        defer { withExtendedLifetime(doc) {} }
+        let item = NSMenuItem()
+        item.tag = NSTextFinder.Action.showFindInterface.rawValue
+        view.performTextFinderAction(item)
+        #expect(editor.scrollView.isFindBarVisible)
+        #expect(view.usesFindBar)
+    }
+
+    @Test func theMenuReachesItsActions() {
+        _ = NSApplication.shared
+        let menu = MainMenu.make()
+        let titles = menu.items.compactMap { $0.submenu?.title }
+        #expect(titles == ["Marklight", "File", "Edit", "Window"])
+        let edit = menu.items[2].submenu!
+        #expect(edit.item(withTitle: "Undo")?.action == #selector(SourceTextView.undo(_:)))
+        #expect(edit.item(withTitle: "Find")?.submenu?.items.count == 5)
+    }
+
+    /// Set MARKLIGHT_LARGE_FILE to a Markdown path to print timings.
+    @Test func largeFileTimings() async throws {
+        guard let path = ProcessInfo.processInfo.environment["MARKLIGHT_LARGE_FILE"] else { return }
+        let source = URL(fileURLWithPath: path)
+        let url = try makeFolder().appendingPathComponent("large.md")
+        try FileManager.default.copyItem(at: source, to: url)
+        let clock = ContinuousClock()
+        var opened: (doc: MarkdownDocument, view: SourceTextView, editor: SourceEditor)!
+        let openTime = clock.measure { opened = try! open(url) }
+        let (doc, view, _) = opened!
+        defer { withExtendedLifetime(doc) {} }
+        var highlighted = Duration.zero
+        let t0 = clock.now
+        let done = await wait { (view.textStorage?.attribute(.font, at: 2, effectiveRange: nil) as? NSFont)?.fontDescriptor.symbolicTraits.contains(.bold) ?? false }
+        highlighted = clock.now - t0
+        view.setSelectedRange(NSRange(location: view.string.utf16.count / 2, length: 0))
+        var total = Duration.zero
+        for _ in 0..<50 {
+            total += clock.measure { view.insertText("x", replacementRange: view.selectedRange()) }
+        }
+        let saveTime = clock.now
+        try await save(doc)
+        print("LARGE \(try Data(contentsOf: source).count / 1024) KB: open \(openTime), first highlight \(highlighted) (\(done)), keystroke \(total / 50), save \(clock.now - saveTime)")
+    }
+
     // MARK: - Composition in the source pane
 
     @Test func markedTextStaysOutOfTheBuffer() throws {
