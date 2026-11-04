@@ -2,7 +2,7 @@
 
 The rendered pane's JS-to-Swift interface, as settled by Spikes 3, 4, and 5. Keep this surface minimal: JS reports events as source offsets, and Swift decides what they mean.
 
-Approved by the owner on 2026-11-04. Changing it needs the Coordinator's approval (`AGENTS.md` section 3). Updated with the Spike 4 and 5 changes, approved the same day.
+Approved by the owner on 2026-11-04. Changing it needs the Coordinator's approval (`AGENTS.md` section 3). Updated with the Spike 4 and 5 changes, approved the same day, and with `selection` and `marklight.reveal` for M2, also approved by the owner.
 
 All offsets are UTF-16 code units into the decoded text (`docs/contracts.md`). The handler is registered only in the isolated content world (Spike 6), and Swift must check each message's shape against this list and drop anything else.
 
@@ -16,6 +16,7 @@ All offsets are UTF-16 code units into the decoded text (`docs/contracts.md`). T
 | `toggle` | `v`, `kind`, `start`, `end` | Formatting shortcut. `kind` is `strong`, `em`, or `code` |
 | `checkbox` | `v`, `checkbox`, `start`, `end` | `mousedown` on a task checkbox. `checkbox` is the item's start; `start` and `end` are the selection to restore |
 | `undo` | `v`, `redo` | Cmd-Z or Cmd-Shift-Z, or `historyUndo` and `historyRedo` |
+| `selection` | `v`, `start`, `end` | The user clicked or selected in the rendered pane. Sent from `mouseup` and from selection keys, not from `selectionchange`, so a DOM patch can't report a selection nobody made |
 
 - `v` is the document version the page had applied, so Swift can carry offsets across edits it hadn't seen. `targetV` is the same for `target`, which is read when the event fires rather than when the message is sent.
 - `start` and `end` are the selection. `target` is the first of `getTargetRanges()` as `[start, end]`, or null. `range` is the selection saved at `compositionstart`, and replaces the live selection.
@@ -32,6 +33,7 @@ All offsets are UTF-16 code units into the decoded text (`docs/contracts.md`). T
 | `marklight.done()` | Swift has finished with the message in flight |
 | `marklight.select(start, end)` | Set the selection |
 | `marklight.selection()` | Read the selection as `[start, end]`, for menu commands |
+| `marklight.reveal(offset)` | Scroll the block at `offset` into view if it's off screen. Doesn't touch the selection |
 
 ## Additions to the render output
 

@@ -60,6 +60,19 @@ All approved by the owner on 2026-11-04.
 - Minimum macOS stays 14: it's still within Apple's usual support window alongside macOS 15 and 26.
 - Autosave is a setting, off by default, because silent in-place saves interact with git and file watchers (`docs/plan.md` 2.7). Coordinator can change this.
 
+## Approved for M2
+
+Approved by the owner on 2026-11-04, from the M2 plan.
+
+- Bridge additions for selection sync: the `selection` message and `marklight.reveal(offset)`. In `docs/bridge.md`.
+- M2 uses a subset of the bridge: `ready`, `selection`, `marklight.load`, `marklight.patch`, and `marklight.reveal`.
+- First-launch layout is split, with Cmd-1, Cmd-2, and Cmd-3 for source, preview, and split. The choice is remembered for the whole app.
+- highlight.js stays out of M2, because it would rewrite the code DOM that carries `data-run` offsets. Code block color can come with M5.
+- Inline HTML stays a literal chip, as in Spike 3. Only HTML blocks go through the sanitizer.
+- "Load remote images" allows `https:` only, and reloads the page with a wider CSP.
+- Heading anchors are resolved in JS when a link is clicked. A stored `id` would depend on duplicate headings above it, so a block's HTML would change with the text above it.
+- The buffer stays on the main thread in M2. Only parsing, rendering, and diffing move off it.
+
 ## Known gaps for milestones
 
 - M3: every edit re-parses the whole file (Spikes 3 and 4). Incremental parsing is required for large files.
