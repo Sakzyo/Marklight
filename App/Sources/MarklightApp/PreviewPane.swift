@@ -148,8 +148,12 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
             arguments = ["list": blocks.map(block), "v": update.version, "editable": !buffer.isReadOnly,
                          "start": update.caret?.lowerBound as Any? ?? NSNull(), "end": update.caret?.upperBound as Any? ?? NSNull()]
         case .patch(let patch):
-            code = "marklight.patch(m)"
-            arguments = ["m": ["v": update.version, "from": patch.from, "remove": patch.remove,
+            code = """
+            const doc = document.getElementById('doc');
+            if (doc.isContentEditable !== editable) doc.contentEditable = editable ? 'true' : 'false';
+            marklight.patch(m);
+            """
+            arguments = ["editable": !buffer.isReadOnly, "m": ["v": update.version, "from": patch.from, "remove": patch.remove,
                                "list": patch.list.map(block), "delta": patch.delta,
                                "local": update.caret != nil, "edits": update.edits,
                                "caret": update.caret.map { [$0.lowerBound, $0.upperBound] } as Any? ?? NSNull()] as [String: Any]]
@@ -261,7 +265,7 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         guard input.target == nil || target != nil else { return refuse() }
         let generation = self.generation
         updater.verify(inputType: input.type, data: input.data, selection: selection,
-                       target: input.type == "insertText" ? nil : target) { [weak self] version, edit in
+                       target: target) { [weak self] version, edit in
             guard let self, self.generation == generation else { return }
             // A source key may have arrived during verification. Rebase the
             // intent and verify that candidate against the buffer now on screen.

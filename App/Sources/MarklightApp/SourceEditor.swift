@@ -102,10 +102,9 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
             let from = patch.transform(selected.location), to = patch.transform(NSMaxRange(selected))
             textView.setSelectedRange(NSRange(location: from, length: to - from))
         }
-        if var anchorPoint = anchor {
-            let rect = textView.firstRect(forCharacterRange: NSRange(location: anchorPoint.offset, length: 0), actualRange: nil)
-            anchorPoint.screenY -= rect.minY
-            clip.scroll(to: NSPoint(x: origin.x, y: clip.bounds.origin.y + anchorPoint.screenY))
+        if let anchor {
+            let rect = textView.firstRect(forCharacterRange: NSRange(location: anchor.offset, length: 0), actualRange: nil)
+            clip.scroll(to: NSPoint(x: origin.x, y: clip.bounds.origin.y + anchor.screenY - rect.minY))
         } else if origin != clip.bounds.origin {
             clip.scroll(to: origin)
         }
