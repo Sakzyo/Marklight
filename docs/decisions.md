@@ -49,6 +49,8 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 - Save strategy: resolve symlinks at open and use the resolved URL as the NSDocument `fileURL`; NSDocument safe save; in-place write when the file has more than one hard link (Spike 2).
 - Remote images blocked by default, with a per-window "Load remote images" bar (Spike 6, open question 1).
 - Local file access root: the git repository root when the document is inside one, otherwise the document's folder; serve the page at the document's matching path so `../` resolves as on disk (Spike 6, open question 2).
+- `data-src` relative to the top-level block, with the block's offset held in JS (Spike 4). Changes an approved contract.
+- Bridge: `v` and `targetV` on messages; `marklight.load`, `patch`, and `done` in place of `update` (Spike 4). Changes an approved contract.
 - Compare text by UTF-8 bytes, never `String ==`, which treats canonically equivalent text as equal (Spike 2).
 
 ## Spike results
@@ -58,6 +60,6 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 | 1 Source ranges | Partial pass. Columns are UTF-8 byte offsets. Block ranges reliable; about 1.5% of inline ranges in real files are wrong for 6 known cmark-gfm reasons. See `spikes/spike1-ranges/REPORT.md` | Keep swift-markdown; add an inline re-anchoring pass in `Parser.swift`; always parse with `.disableSmartOpts` | 2026-11-03 |
 | 2 Zero-diff I/O | Pass: 21/21 files byte-identical; mode, xattrs and symlinks kept. See `spikes/spike2-io/REPORT.md` | None needed. Escaped-UTF-8 decode for invalid bytes; raw bytes kept as read-only fallback | 2026-11-03 |
 | 3 Rendered edit to patch | Pass, recommend GO. 174 scenarios at engine and WKWebView level, 27 browser-resolved cases, 0 round-trip mismatches in 56,175 blocks, 0 violations and 0 crashes in 126,565 fuzz edits. All input synthesized; IME and web-view undo are Spike 5. See `spikes/spike3-patches/REPORT.md` | None needed: `beforeinput` interception with Swift commands. Inline ranges come from an AST-guided walk rather than corrected cmark offsets, which replaces the approach in the Spike 1 report | 2026-11-04 |
-| 4 Caret stability | | | |
+| 4 Caret stability | Pass: caret and scroll undisturbed, no block node replaced, 60 keys/s at up to 100 KB, 39 of 39 checks plus 201 regression cases. Painting not checked by eye. See `spikes/spike4-stability/REPORT.md` | None needed. Editing must run off the main thread | 2026-11-04 |
 | 5 IME and undo | | | |
 | 6 Preview security | Pass: in-tree images load; traversal, symlink escapes, non-images and remote images blocked; no document script ran; links go to the browser. See `spikes/spike6-security/REPORT.md` | None needed. Scheme `marklight-preview://doc/`; DOMPurify + strict CSP + page JS off, with Marklight JS in an isolated content world | 2026-11-03 |
