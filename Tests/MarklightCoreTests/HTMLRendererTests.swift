@@ -314,11 +314,12 @@ struct HTMLRendererTests {
         let patch = Patch(range: at..<at, replacement: Array("字🦉".utf16), origin: .rendered)
         let next = doc.applying(patch)
         #expect(!next.usedFullParse)
-        let local = HTMLRenderer.render(next, pending: nil, reusing: old, patch: patch)
+        let (local, update) = HTMLRenderer.update(old, to: next, after: patch, pending: nil)
         let fresh = HTMLRenderer.render(ParsedDocument(units: next.units))
         #expect(local == fresh)
         #expect(local.hasRemoteImages)
-        #expect(old.patch(to: local).list.count == 1)
+        #expect(update.list.count == 1)
+        #expect(apply(update, to: old) == fresh.blocks)
     }
 
     @Test("A pending paragraph has a real caret without adding source bytes")

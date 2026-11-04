@@ -73,29 +73,34 @@ public enum HTMLRenderer {
         return document(blocks, length: doc.units.count)
     }
 
-    /// The worker may reuse the render of the snapshot immediately preceding
-    /// `patch`. A successful local parse changed one top-level block.
-    public static func render(_ doc: IncrementalDocument, pending: Int?, reusing previous: RenderedDocument? = nil,
-                              patch: Patch? = nil) -> RenderedDocument {
+    public static func render(_ doc: IncrementalDocument, pending: Int?) -> RenderedDocument {
         let caret = pending ?? (doc.units.isEmpty ? 0 : nil)
-        var blocks: [RenderedBlock]
-        if let index = doc.changedBlock, caret == nil, let previous, let patch, previous.blocks.count == doc.blockCount,
-           previous.length + patch.replacement.count - patch.range.count == doc.units.count {
-            blocks = previous.blocks
-            blocks[index] = render(doc.block(at: index), units: doc.units)
-            let delta = doc.units.count - previous.length
-            if delta != 0 {
-                for i in (index + 1)..<blocks.count { blocks[i].base += delta }
-            }
-        } else {
-            blocks = (0..<doc.blockCount).map { render(doc.block(at: $0), units: doc.units) }
-        }
+        var blocks = (0..<doc.blockCount).map { render(doc.block(at: $0), units: doc.units) }
         if let caret, doc.containing(caret) == nil {
             let index = blocks.firstIndex { $0.base >= caret } ?? blocks.endIndex
             let placeholder = #"<p data-src="0:0" data-caret="0"><br data-src="0:0"></p>"#
             blocks.insert(RenderedBlock(html: placeholder, base: caret), at: index)
         }
         return document(blocks, length: doc.units.count)
+    }
+
+    /// Only for the render immediately preceding this verified edit. The
+    /// parser proved that every other subtree is unchanged, so neither the
+    /// renderer nor the diff needs to visit its HTML again.
+    public static func update(_ previous: RenderedDocument, to doc: IncrementalDocument, after edit: Patch,
+                              pending: Int?) -> (document: RenderedDocument, patch: BlockPatch) {
+        guard let index = doc.changedBlock, pending == nil, previous.blocks.count == doc.blockCount,
+              previous.length + edit.replacement.count - edit.range.count == doc.units.count else {
+            let new = render(doc, pending: pending)
+            return (new, previous.patch(to: new))
+        }
+        var blocks = previous.blocks
+        blocks[index] = render(doc.block(at: index), units: doc.units)
+        let delta = doc.units.count - previous.length
+        if delta != 0 {
+            for i in (index + 1)..<blocks.count { blocks[i].base += delta }
+        }
+        return (document(blocks, length: doc.units.count), BlockPatch(from: index, remove: 1, list: [blocks[index]], delta: delta))
     }
 
     private static func render(_ block: Block, units: [UInt16]) -> RenderedBlock {
