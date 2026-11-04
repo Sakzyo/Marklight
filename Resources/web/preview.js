@@ -42,6 +42,14 @@
   function makeBlock(html, base) {
     const el = document.createElement('div');
     el.append(sanitize(html));
+    // Only renderer-owned elements have been unpacked here. A raw descendant
+    // cannot declare itself editable or manufacture an offset.
+    for (const item of el.querySelectorAll('pre,table,hr,img,input,.opaque,.inline-html,[data-raw]')) {
+      item.contentEditable = 'false';
+    }
+    for (const leaf of el.querySelectorAll('[data-caret]:empty')) {
+      if (!leaf.closest('[contenteditable="false"]')) leaf.append(document.createElement('br'));
+    }
     expandRaw(el);
     el._base = base;
     return el;
@@ -176,6 +184,190 @@
     return [toSource(range.startContainer, range.startOffset), toSource(range.endContainer, range.endOffset)];
   }
 
+  // Resolve a source offset within just one block. At a delimiter, prefer the
+  // nearest actual text position. An empty leaf has its own caret before its br.
+  function position(offset) {
+    if (!blocks.length) return [root, 0];
+    const block = blocks[blockIndexAt(offset)], at = offset - block._base;
+    const empty = block.querySelector(`[data-caret="${at}"]`);
+    if (empty) return [empty, 0];
+    let closest = [block, 0], distance = Infinity;
+    for (const run of block.querySelectorAll('[data-run]')) {
+      const [lo, hi] = local(run);
+      const node = run.firstChild;
+      if (node?.nodeType === 3 && !run.hasAttribute('data-atomic') && lo <= at && at <= hi) {
+        return [node, at - lo];
+      }
+      for (const end of [false, true]) {
+        const d = Math.abs(at - (end ? hi : lo));
+        if (d >= distance) continue;
+        distance = d;
+        if (node?.nodeType === 3 && !run.closest('[contenteditable="false"]')) {
+          closest = [node, end ? node.length : 0];
+        } else {
+          closest = [run.parentNode, Array.prototype.indexOf.call(run.parentNode.childNodes, run) + Number(end)];
+        }
+      }
+    }
+    return closest;
+  }
+
+  let remembered = null;
+  function select(start, end) {
+    const [a, ao] = position(start), [b, bo] = start === end ? [a, ao] : position(end);
+    getSelection().setBaseAndExtent(a, ao, b, bo);
+    remembered = [start, end];
+  }
+
+  const pending = [];
+  let inFlight = false, movedSinceInput = false, clicked = false;
+  let composing = null;
+
+  function input(inputType, data = null, target = null, range = null) {
+    return {type: 'input', inputType, data, target, targetV: version, composed: range !== null, range};
+  }
+
+  function sendNext() {
+    while (!inFlight && pending.length) {
+      const event = pending.shift();
+      if (event.move) {
+        replayMove(event);
+        continue;
+      }
+      let message;
+      if (event.type === 'undo') {
+        message = {...event, v: version};
+      } else {
+        const [start, end] = event.range || selection() || remembered || [0, 0];
+        message = {...event, v: version, start, end};
+      }
+      inFlight = true;
+      movedSinceInput = false;
+      post(message);
+    }
+  }
+
+  function enqueue(event) {
+    const last = pending.at(-1);
+    // A target range is meaningful for deletes and replacement text. For
+    // ordinary adjacent typing Swift uses the caret from the preceding reply.
+    if (last?.inputType === 'insertText' && event.inputType === 'insertText' && !last.composed && !event.composed) {
+      last.data += event.data;
+    } else {
+      pending.push(event);
+    }
+    sendNext();
+  }
+
+  document.addEventListener('selectionchange', () => {
+    if (!composing && document.activeElement === root) remembered = selection() || remembered;
+  });
+  root.addEventListener('mousedown', () => { clicked = true; movedSinceInput = true; });
+  document.addEventListener('mouseup', () => { clicked = false; });
+  root.addEventListener('focus', () => {
+    if (remembered && !clicked && !composing) select(...remembered);
+  });
+
+  // Native input methods temporarily own the DOM. Preserve every top-level
+  // block covered by their selection; a cancellation may span several blocks.
+  root.addEventListener('compositionstart', () => {
+    const range = selection() || remembered || [0, 0];
+    const saved = blocks.slice(blockIndexAt(range[0]), blockIndexAt(range[1]) + 1)
+      .map(block => [block, block.cloneNode(true)]);
+    composing = {range, saved, deferred: []};
+  });
+
+  root.addEventListener('compositionend', e => {
+    const session = composing;
+    composing = null;
+    if (!session) return;
+    // Restore the authoritative DOM even on commit. Swift can refuse a commit.
+    if (root.childNodes.length !== blocks.length || blocks.some((block, i) => root.childNodes[i] !== block)) {
+      root.replaceChildren(...blocks);
+    }
+    for (const [block, saved] of session.saved) morph(block, saved);
+    let range = session.range;
+    for (const m of session.deferred) {
+      marklight.patch(m);
+      range = carry(range, m.edits);
+    }
+    select(...range);
+    if (e.data) enqueue(input('insertText', e.data, null, range));
+  });
+
+  const compositionInputs = new Set(['insertCompositionText', 'deleteCompositionText', 'insertFromComposition', 'deleteByComposition']);
+  root.addEventListener('beforeinput', e => {
+    if (composing && (e.isComposing || compositionInputs.has(e.inputType))) return;
+    e.preventDefault();
+    if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+      return enqueue({type: 'undo', redo: e.inputType === 'historyRedo'});
+    }
+    const r = e.getTargetRanges()[0];
+    const target = r && root.contains(r.startContainer) && root.contains(r.endContainer)
+      ? [toSource(r.startContainer, r.startOffset), toSource(r.endContainer, r.endOffset)] : null;
+    enqueue(input(e.inputType, e.data, target));
+  });
+
+  for (const [name, type] of [['paste', 'insertFromPaste'], ['drop', 'insertFromDrop']]) {
+    root.addEventListener(name, e => {
+      e.preventDefault();
+      enqueue(input(type));
+    });
+  }
+  root.addEventListener('dragover', e => e.preventDefault());
+
+  const navigation = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
+  function replayMove({move, shift, alt, meta}) {
+    const s = getSelection(), change = shift ? 'extend' : 'move';
+    const forward = ['ArrowRight', 'ArrowDown', 'End', 'PageDown'].includes(move);
+    const direction = forward ? 'forward' : 'backward';
+    if (move === 'PageDown' || move === 'PageUp') {
+      const top = () => s.rangeCount ? s.getRangeAt(0).getBoundingClientRect().top : 0;
+      const first = top();
+      for (let lines = 0; lines < innerHeight && Math.abs(top() - first) < innerHeight; lines++) {
+        const old = s.focusNode, at = s.focusOffset;
+        s.modify(change, direction, 'line');
+        if (s.focusNode === old && s.focusOffset === at) break;
+      }
+    } else {
+      const vertical = move === 'ArrowUp' || move === 'ArrowDown';
+      const unit = move === 'Home' || move === 'End' || (meta && vertical) ? 'documentboundary'
+        : meta ? 'lineboundary' : vertical ? 'line' : alt ? 'word' : 'character';
+      s.modify(change, direction, unit);
+    }
+    remembered = selection() || remembered;
+    report();
+  }
+
+  root.addEventListener('keydown', e => {
+    if (composing || e.isComposing || e.keyCode === 229) return;
+    if (navigation.has(e.key)) {
+      if (inFlight || pending.length) {
+        e.preventDefault();
+        enqueue({move: e.key, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey});
+      } else {
+        movedSinceInput = true;
+      }
+      return;
+    }
+    if (e.metaKey && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      enqueue({type: 'undo', redo: e.shiftKey});
+      return;
+    }
+    const format = e.metaKey && {b: 'formatBold', i: 'formatItalic', e: 'formatCode'}[e.key.toLowerCase()];
+    const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
+    if (format || (plain && (e.key === 'Backspace' || e.key === 'Enter'))) {
+      e.preventDefault();
+      enqueue(input(format || (e.key === 'Backspace' ? 'deleteContentBackward' : e.shiftKey ? 'insertLineBreak' : 'insertParagraph')));
+    }
+  });
+
+  function carry(range, edits = []) {
+    return range.map(offset => edits.reduce((at, [lo, hi, length]) =>
+      at >= hi ? at + length - (hi - lo) : at > lo ? lo + length : at, offset));
+  }
+
   // Not `selectionchange`, which also fires when a patch replaces selected nodes.
   // Deferred because a click inside a selection clears it only after `mouseup`.
   function report(event) {
@@ -187,7 +379,7 @@
 
   document.addEventListener('mouseup', report);
   document.addEventListener('keyup', e => {
-    if (e.shiftKey && e.key.startsWith('Arrow')) report();
+    if (!inFlight && !pending.length && navigation.has(e.key)) report();
   });
 
   const slug = text => text.trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc}\- ]/gu, '').replace(/ /g, '-');
@@ -221,7 +413,9 @@
 
   document.addEventListener('click', e => {
     const link = e.target.closest && e.target.closest('a[href]');
-    const name = link && fragment(link);
+    if (!link) return;
+    if (!e.metaKey) { e.preventDefault(); return; }
+    const name = fragment(link);
     if (!name) return;
     e.preventDefault();
     const target = anchorTarget(name);
@@ -230,18 +424,37 @@
 
   globalThis.marklight = {
     /// Shows a whole document. `list` is `[{html, base}]`.
-    load(list, v) {
+    load(list, v, start, end) {
       const holder = document.createDocumentFragment();
       const made = list.map(b => holder.appendChild(makeBlock(b.html, b.base)));
       root.replaceChildren(holder);
       blocks = made;
       version = v;
+      if (start != null && end != null) select(start, end);
+    },
+
+    select, selection,
+    done() {
+      inFlight = false;
+      sendNext();
     },
 
     /// Replaces `remove` blocks at `from` with `list`, keeping every node it can.
     patch(m) {
-      const anchors = scrollAnchors();
       const live = blocks.slice(m.from, m.from + m.remove);
+      if (composing) {
+        if (composing.deferred.length || composing.saved.some(([block]) => live.includes(block) || !block.isConnected)) {
+          composing.deferred.push(m);
+          return;
+        }
+        composing.range = carry(composing.range, m.edits);
+      }
+      const anchors = m.local ? [] : scrollAnchors();
+      const s = getSelection();
+      const selected = !composing && document.activeElement === root ? selection() : null;
+      const touched = selected && (live.includes(blockOf(s.anchorNode)) || live.includes(blockOf(s.focusNode)));
+      if (remembered) remembered = carry(remembered, m.edits);
+      for (const event of pending) if (event.range) event.range = carry(event.range, m.edits);
       const after = blocks.slice(m.from + m.remove);
       const made = m.list.map(b => makeBlock(b.html, b.base));
       const paired = Math.min(live.length, made.length);
@@ -259,6 +472,10 @@
       if (m.delta) for (const el of after) el._base += m.delta;
       blocks = blocks.slice(0, m.from).concat(kept, after);
       version = m.v;
+      if (!composing) {
+        if (m.local && m.caret && !movedSinceInput && document.activeElement === root) select(...m.caret);
+        else if (touched) select(...carry(selected, m.edits));
+      }
       restoreScroll(anchors);
     },
 
