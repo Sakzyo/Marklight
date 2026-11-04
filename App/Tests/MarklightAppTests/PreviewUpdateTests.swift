@@ -72,13 +72,18 @@ const changes = window._changes.takeRecords().filter(r => r.target !== root && !
 return [lost, total, changes];
 """
 
-/// Remembers the element at the top of the viewport, and returns where it is.
+/// Remembers the text at the top of the viewport, and returns where it is. It's
+/// the text that has to hold still: a reused node showing other text proves nothing.
 private let watchTop = """
-window._watched = [...document.querySelectorAll('#doc p, #doc li')].find(el => el.getBoundingClientRect().top > 0);
-return window._watched.getBoundingClientRect().top;
+const el = [...document.querySelectorAll('#doc p, #doc li')].find(el => el.getBoundingClientRect().top > 0);
+window._watched = el.textContent;
+return el.getBoundingClientRect().top;
 """
 
-private let watchedTop = "return window._watched.isConnected ? window._watched.getBoundingClientRect().top : null"
+private let watchedTop = """
+const el = [...document.querySelectorAll('#doc p, #doc li')].find(el => el.textContent === window._watched);
+return el ? el.getBoundingClientRect().top : null;
+"""
 
 /// Stops the page's scroll correction, as if anchoring had been removed.
 private let removeAnchoring = "window.scrollBy = () => {}"
@@ -248,7 +253,7 @@ struct PreviewUpdateTests {
         try edit(h.doc.buffer)
         try await h.settle()
         await pump(for: 0.05)
-        guard let after = try await h.js(watchedTop) as? Double else { throw HarnessFailure(description: "the watched element was replaced") }
+        guard let after = try await h.js(watchedTop) as? Double else { throw HarnessFailure(description: "the watched text is gone") }
         return after - before
     }
 
