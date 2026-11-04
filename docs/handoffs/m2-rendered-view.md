@@ -25,6 +25,7 @@ Status: done, pending the owner's hands-on check. Not merged, not pushed
 - `PreviewPane.swift`: the web view, navigation policy, link routing, bridge checks, context menu filter, and remote images bar.
 - `PreviewUpdater.swift`: parsing, rendering, and diffing on their own queue, one update in flight, with edits coalesced.
 - `EditorWindowController.swift`: the split view, layouts, and selection sync. `MainMenu.swift` gains the View menu.
+- `SourceEditor.swift`: files now open with the caret at the start, not the end, and undo and redo tell the window where the caret went.
 - `scripts/build-app.sh` copies `Resources/web/` into the bundle.
 
 `Tests/Fixtures/attack.md` is new, ported from Spike 6, with forged-offset cases and raw HTML links added.
@@ -40,13 +41,13 @@ Status: done, pending the owner's hands-on check. Not merged, not pushed
 | Command | Result |
 |---|---|
 | `swift test` | exit 0, 81 tests |
-| `swift test --package-path App` | exit 0, 98 tests, twice in a row on the final code, and three times just before it |
+| `swift test --package-path App` | exit 0, 100 tests, twice in a row on the final code |
 | `scripts/build-app.sh`, then launching the bundle | Split, preview-only, and a restored window all rendered, seen in window captures. No crash, and the files were untouched |
 | `MARKLIGHT_TIMING=1 swift test --package-path App -c release -Xswiftc -enable-testing --filter PreviewTimingTests` | See below |
 
 The app tests cover a hostile document in a real `WKWebView`, with a no-defences control; the path policy; links; a live DOM equal to a fresh render, node for node, for every fixture after random edits; node identity; scroll anchoring; zero-diff with the preview open for every fixture; layouts; the remote images bar; and selection sync.
 
-**The tests can fail.** Twelve deliberate breaks were each caught, including removing scroll anchoring, the echo guard, offset stripping, and the path bound. The first round caught 10 of 11, and the miss exposed a weak scroll test, which now follows the text rather than the node.
+**The tests can fail.** Fourteen deliberate breaks were each caught, including removing scroll anchoring, the echo guard, offset stripping, and the path bound. Four of them were rerun on the final code, and the rest just before the last selection and caret changes. The first round caught 10 of 11, and the miss exposed a weak scroll test, which now follows the text rather than the node.
 
 One M1 test changed: `theMenuReachesItsActions` now expects the View menu. Nothing was weakened or skipped.
 
@@ -85,7 +86,6 @@ The preview adds nothing measurable to a keystroke, so incremental parsing isn't
 - **HTML that wraps Markdown doesn't wrap it.** `<details>` and `<div align="center">` close inside their own block, so a details section shows its content while collapsed, and centered Markdown isn't centered. Both are common in READMEs.
 - **`<a name="x"></a>` on its own line is a chip,** and a link to it does nothing. Other inline HTML, such as `<kbd>` and `<br>`, is a chip too, as approved.
 - **`http` images stay blocked** even after "Load Remote Images".
-- **Opening a file puts the caret at the end.** That's M1 behavior, seen here for the first time.
 - **Find does nothing in preview-only layout.**
 - **Link and image titles are dropped.** Loose and tight lists look the same. A link to `other.md#section` opens the file at its top.
 - **A saved window frame from M1 stays 760 wide,** so split can start cramped until the window is resized.
