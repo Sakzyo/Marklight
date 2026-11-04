@@ -212,9 +212,8 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
                   let redo = Self.boolean(body["redo"]) else { return reject(message) }
             waitingForVersion = nil
             inFlight = true
-            guard let result = redo ? buffer.redo() : buffer.undo() else { return finishInput() }
+            guard updater.moveHistory(redo: redo, fromPreview: true) != nil else { return finishInput() }
             waitingForVersion = buffer.version
-            updater.historyMoved(to: result.selection)
         default:
             reject(message)
         }

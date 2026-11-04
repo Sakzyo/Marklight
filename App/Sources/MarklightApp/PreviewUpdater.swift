@@ -25,6 +25,8 @@ final class PreviewUpdater {
     private var changes: [(version: Int, patch: Patch, oldLength: Int)] = []
     private var localCaret: Range<Int>?
     private(set) var pending: Int?
+    private var pendingHistory = PendingCaretHistory()
+    private var movingHistory = false
     private var idleCheck: DispatchWorkItem?
     private var scheduled: DispatchWorkItem?
     private var isPaused = true
@@ -53,7 +55,19 @@ final class PreviewUpdater {
         changes.append((buffer.version, patch, oldLength))
         if changes.count > 512 { changes.removeFirst() }
         parsed = nil
-        if let p = pending { pending = patch.range.contains(p) ? nil : patch.transform(p) }
+        if !movingHistory {
+            if !buffer.canUndo && !buffer.canRedo { // reload discarded the buffer's history
+                pendingHistory = PendingCaretHistory()
+                pending = nil
+            } else {
+                let before = pending
+                if let p = pending {
+                    let replaced = patch.range.contains(p) || (patch.range.lowerBound == p && !patch.replacement.isEmpty)
+                    pending = replaced ? nil : patch.transform(p)
+                }
+                pendingHistory.record(patch, before: before, after: pending)
+            }
+        }
         localCaret = localCaret.map { patch.transform($0.lowerBound)..<patch.transform($0.upperBound) }
         schedule() // accepted() supplies the verified snapshot after all buffer observers return
     }
@@ -98,6 +112,7 @@ final class PreviewUpdater {
     func accepted(_ edit: RenderedEdit) {
         let version = buffer.version
         parsed = (version, edit.document)
+        pendingHistory.confirm(edit.patch, after: edit.pending)
         pending = edit.pending
         localCaret = edit.caret..<edit.caret
         schedule(immediate: true)
@@ -118,16 +133,17 @@ final class PreviewUpdater {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.3, execute: check)
     }
 
-    func historyMoved(to range: Range<Int>) {
-        localCaret = range
-        // Markdown has no paragraph node for an empty physical line. Undoing
-        // typing into one must restore the caret holder so the next key works.
-        let i = range.lowerBound, u = buffer.units
-        if range.isEmpty && (i == 0 || u[i - 1] == 10 || u[i - 1] == 13) &&
-            (i == u.count || u[i] == 10 || u[i] == 13) {
-            pending = i
-        } else { pending = nil }
-        schedule(immediate: true)
+    /// Both responders use Buffer's one history stack. The pending paragraph
+    /// has no Markdown node, so restore its recorded position with that step.
+    func moveHistory(redo: Bool, fromPreview: Bool) -> (patch: Patch, selection: Range<Int>)? {
+        movingHistory = true
+        let result = redo ? buffer.redo() : buffer.undo()
+        movingHistory = false
+        guard let result else { return nil }
+        pending = pendingHistory.move(redo: redo, patch: result.patch)
+        if fromPreview { localCaret = result.selection }
+        schedule(immediate: fromPreview || pending != nil)
+        return result
     }
 
     var isCurrent: Bool { isPageReady && !needsLoad && !isUpdating && shownVersion == buffer.version }
@@ -216,5 +232,57 @@ final class PreviewUpdater {
     private func finished() {
         isUpdating = false
         if isCurrent { caughtUp() } else { schedule(immediate: localCaret != nil) }
+    }
+}
+
+/// Stores only caret positions and lengths, starting at the first pending
+/// paragraph. The Buffer performs the undo and tells us the net change. Its
+/// grouped inserts only grow, and grouped deletes only shrink, so their total
+/// identifies how many component edits the step traversed. Edits creating or
+/// consuming a pending paragraph are sealed on both sides.
+private struct PendingCaretHistory {
+    private struct Change {
+        let delta: Int
+        let before: Int?
+        var after: Int?
+    }
+
+    private var changes: [Change] = []
+    private var cursor = 0
+    private var olderRedoSteps = 0
+
+    mutating func record(_ patch: Patch, before: Int?, after: Int?) {
+        changes.removeSubrange(cursor...)
+        olderRedoSteps = 0
+        guard !changes.isEmpty || before != nil || after != nil else { return }
+        changes.append(Change(delta: patch.replacement.count - patch.range.count, before: before, after: after))
+        cursor += 1
+    }
+
+    /// The synchronous observer recorded a provisional position, before Swift
+    /// received the serializer's authoritative result for this rendered edit.
+    mutating func confirm(_ patch: Patch, after: Int?) {
+        if cursor > 0 {
+            changes[cursor - 1].after = after
+        } else if after != nil {
+            record(patch, before: nil, after: after)
+        }
+    }
+
+    mutating func move(redo: Bool, patch: Patch) -> Int? {
+        guard !changes.isEmpty else { return nil }
+        if !redo && cursor == 0 { olderRedoSteps += 1; return nil }
+        if redo && olderRedoSteps > 0 { olderRedoSteps -= 1; return nil }
+        let total = patch.replacement.count - patch.range.count
+        var delta = 0, position: Int?
+        repeat {
+            guard redo ? cursor < changes.count : cursor > 0 else { break }
+            if !redo { cursor -= 1 }
+            let change = changes[cursor]
+            position = redo ? change.after : change.before
+            delta += redo ? change.delta : -change.delta
+            if redo { cursor += 1 }
+        } while total != delta
+        return position
     }
 }

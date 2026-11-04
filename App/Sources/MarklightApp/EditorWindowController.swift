@@ -139,6 +139,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         guard preview == nil else { return }
         let pane = PreviewPane(buffer: buffer, documentURL: (document as? MarkdownDocument)?.fileURL, defences: defences)
         pane.selectionChanged = { [weak self] range in self?.followPreview(range) }
+        editor.changeHistory = { [updater = pane.updater] redo in updater.moveHistory(redo: redo, fromPreview: false) }
         pane.view.translatesAutoresizingMaskIntoConstraints = true
         pane.view.autoresizingMask = [.width, .height]
         pane.view.frame = previewHolder.bounds

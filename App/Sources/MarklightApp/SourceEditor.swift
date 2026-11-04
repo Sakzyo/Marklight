@@ -18,9 +18,11 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
     private var observer: UUID?
     /// Undo or redo moved the caret, to show what changed.
     var historyMoved: ((Range<Int>) -> Void)?
+    var changeHistory: (Bool) -> (patch: Patch, selection: Range<Int>)?
 
     init(buffer: Buffer) {
         self.buffer = buffer
+        changeHistory = { redo in redo ? buffer.redo() : buffer.undo() }
         textView = SourceTextView(usingTextLayoutManager: true)
         scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 820))
         highlighter = SourceHighlighter(buffer: buffer, textView: textView)
@@ -120,8 +122,26 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         sendingSourcePatch = true
         defer { sendingSourcePatch = false }
         do {
-            try buffer.apply(Patch(range: old, replacement: new, origin: .source),
-                             selectionBefore: selected.location..<(selected.location + selected.length))
+            guard old.upperBound <= buffer.units.count else { throw BufferError.rangeOutOfBounds }
+            let selection = selected.location..<(selected.location + selected.length)
+            // TextKit sometimes reports an entire attributed line for one key.
+            // Find the actual edit within it so redo restores the typed caret.
+            var patch = Patch(range: old, replacement: new, origin: .source)
+            if old != selection && !old.isEmpty {
+                let original = Array(buffer.units[old])
+                let start = selection.lowerBound - old.lowerBound
+                let tail = old.upperBound - selection.upperBound
+                if start >= 0, tail >= 0, start + tail <= new.count,
+                   original.prefix(start).elementsEqual(new.prefix(start)),
+                   original.suffix(tail).elementsEqual(new.suffix(tail)) {
+                    patch = Patch(range: selection, replacement: Array(new[start..<(new.count - tail)]), origin: .source)
+                } else {
+                    let part = Patch.minimal(from: original, to: new, origin: .source)
+                    patch = Patch(range: (old.lowerBound + part.range.lowerBound)..<(old.lowerBound + part.range.upperBound),
+                                  replacement: part.replacement, origin: .source)
+                }
+            }
+            try buffer.apply(patch, selectionBefore: selection)
         } catch {
             // The two copies disagree, and the buffer is the truth. Not from the
             // storage's own delegate call, which can't take another edit.
@@ -166,9 +186,9 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
 
     // MARK: - Undo
 
-    func undo() { moveHistory(buffer.undo()) }
+    func undo() { moveHistory(changeHistory(false)) }
 
-    func redo() { moveHistory(buffer.redo()) }
+    func redo() { moveHistory(changeHistory(true)) }
 
     private func moveHistory(_ result: (patch: Patch, selection: Range<Int>)?) {
         guard let result else { return }
