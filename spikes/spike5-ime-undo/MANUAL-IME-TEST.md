@@ -47,7 +47,7 @@ Switch to Japanese Romaji.
 
 ## Results
 
-2026-11-04, the owner: every step passed except 13, where the last character in a line and an empty line couldn't be deleted. Fixed; step 13 is awaiting a retest.
+2026-11-04, the owner: every step passed except 13, where the last character in a line and an empty line couldn't be deleted. Fixed, and the owner confirmed step 13 passes on retest. The retest also showed that a code block at the end of a document can't be left; see `REPORT.md`.
 
 ## Report back
 

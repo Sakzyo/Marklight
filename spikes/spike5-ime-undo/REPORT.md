@@ -1,6 +1,6 @@
 # Spike 5 report: IME composition and unified undo
 
-**Result: undo PASS. IME PASS with real Pinyin and Japanese input, with one step awaiting a retest.** The owner ran [MANUAL-IME-TEST.md](MANUAL-IME-TEST.md) on 2026-11-04. Every step passed except step 13, which found a real bug, now fixed. The spike closes when step 13 passes again. The fallback, patching on `compositionend` and owning undo in Swift, is the design used here, and it's holding.
+**Result: PASS.** Undo and IME both pass, including with real Pinyin and Japanese input. The owner ran [MANUAL-IME-TEST.md](MANUAL-IME-TEST.md) on 2026-11-04: every step passed except step 13, which found a real bug. It was fixed, and the owner confirmed step 13 passes on retest. The fallback, patching on `compositionend` and owning undo in Swift, is the design used here, and it's holding.
 
 Date: 2026-11-04. macOS 26.5.2, Swift 6.3.3, release build. Throwaway code. This extends Spike 4 rather than Spike 3 as the prompt says, because Spike 3 rebuilt the whole DOM on each edit, which would destroy a composition.
 
@@ -8,7 +8,7 @@ Date: 2026-11-04. macOS 26.5.2, Swift 6.3.3, release build. Throwaway code. This
 
 | Check | Result |
 |---|---|
-| Real IME, manual test by the owner | All 18 steps passed except step 13 (fixed, retest pending) |
+| Real IME, manual test by the owner | All 18 steps pass. Step 13 failed, was fixed, and passes on retest |
 | IME protocol cases in a real `WKWebView` | **49 of 49** |
 | Undo and redo through real Cmd-Z key events, across both panes | **19 of 19** |
 | Spike 3 regression cases, plus the new empty-line cases | **217 of 217** |
@@ -63,7 +63,9 @@ WebKit's sequence on commit: `compositionupdate`, `beforeinput insertComposition
 
 The fix marks that delete as deliberate. A line break left at the edge of a paragraph now goes with the line, which was a related refusal. 16 scenarios and 6 IME cases now cover this, including the exact sequence from step 13.
 
-The owner also reported being unable to delete an empty line. Enter then Backspace worked in the automated tests even before the fix, so this may have been a result of the refused character, or something that only happens with a real IME active. The retest will tell.
+The owner also reported being unable to delete an empty line. On the retest, the log shows the last character and then the empty line going with Backspace, repeatedly. That retest log has no composition events, so it covers Backspace with plain typing. Composing on a new line passed in the first manual run, and compose, delete, delete is covered by the protocol cases.
+
+**The retest log also shows a gap: a code block at the end of a document is a trap.** After the last paragraph and its empty line were deleted, the caret landed in the code block above. Enter then added blank lines inside the code, and retyped text went into the code too. Nothing in the rendered pane gets out of it. It needs a design for M5, such as Enter on an empty last line leaving the block, or a caret position after the block. A table at the end of a document has no way out either, by the same logic, though that wasn't tried.
 
 ## What needed special handling
 
@@ -85,7 +87,6 @@ These extend the approved bridge contract, so they're proposals: a new `undo` me
 
 ## Not verified
 
-- **Step 13 after the fix,** with a real IME.
 - **Partial commits of Japanese clauses beyond step 10, reconversion, and `replacementRange`.**
 - **Korean, Vietnamese, dictation, and press-and-hold accents,** which also use marked text.
 - **A bundled app.** The manual test ran as a bare executable, and the input method worked. The macOS log line `error messaging the mach port for IMKCFRunLoopWakeUpReliable` appeared and had no visible effect.

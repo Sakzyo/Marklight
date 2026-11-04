@@ -54,6 +54,13 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 - Bridge: an `undo` message, and `composed` and `range` on `input` (Spike 5). Changes an approved contract.
 - Compare text by UTF-8 bytes, never `String ==`, which treats canonically equivalent text as equal (Spike 2).
 
+## Known gaps for milestones
+
+- M3: every edit re-parses the whole file (Spikes 3 and 4). Incremental parsing is required for large files.
+- M3: editing must run off the main thread (Spike 4).
+- M5: nothing in the rendered pane gets out of a code block at the end of a document (Spike 5 manual test). Needs a design.
+- Before shipping: autosave or recovery, because a Swift trap can't be caught (Spike 3).
+
 ## Spike results
 
 | Spike | Result | Fallback taken | Date |
@@ -62,5 +69,5 @@ Decisions made during brainstorming (2026-11-03). Add spike results at the botto
 | 2 Zero-diff I/O | Pass: 21/21 files byte-identical; mode, xattrs and symlinks kept. See `spikes/spike2-io/REPORT.md` | None needed. Escaped-UTF-8 decode for invalid bytes; raw bytes kept as read-only fallback | 2026-11-03 |
 | 3 Rendered edit to patch | Pass, recommend GO. 174 scenarios at engine and WKWebView level, 27 browser-resolved cases, 0 round-trip mismatches in 56,175 blocks, 0 violations and 0 crashes in 126,565 fuzz edits. All input synthesized; IME and web-view undo are Spike 5. See `spikes/spike3-patches/REPORT.md` | None needed: `beforeinput` interception with Swift commands. Inline ranges come from an AST-guided walk rather than corrected cmark offsets, which replaces the approach in the Spike 1 report | 2026-11-04 |
 | 4 Caret stability | Pass: caret and scroll undisturbed, no block node replaced, 60 keys/s at up to 100 KB, 39 of 39 checks plus 201 regression cases. Painting not checked by eye. See `spikes/spike4-stability/REPORT.md` | None needed. Editing must run off the main thread | 2026-11-04 |
-| 5 IME and undo | Undo pass: one Swift stack, exact bytes after fuzz. IME pass with real Pinyin and Japanese: the owner's manual test passed every step except 13, which found a Backspace bug, now fixed. **Stays open until step 13 is retested.** See `spikes/spike5-ime-undo/REPORT.md` | Patch on `compositionend`, own undo in Swift (the planned approach) | 2026-11-04 |
+| 5 IME and undo | Pass. One Swift undo stack, exact bytes after fuzz. Real Pinyin and Japanese pass the owner's manual test; step 13 found a Backspace bug, fixed and confirmed on retest. See `spikes/spike5-ime-undo/REPORT.md` | Patch on `compositionend`, own undo in Swift (the planned approach) | 2026-11-04 |
 | 6 Preview security | Pass: in-tree images load; traversal, symlink escapes, non-images and remote images blocked; no document script ran; links go to the browser. See `spikes/spike6-security/REPORT.md` | None needed. Scheme `marklight-preview://doc/`; DOMPurify + strict CSP + page JS off, with Marklight JS in an isolated content world | 2026-11-03 |
