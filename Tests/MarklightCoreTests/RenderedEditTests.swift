@@ -53,8 +53,17 @@ struct RenderedEditTests {
         }
     }
 
+    @Test func targetValidation() throws {
+        let doc = IncrementalDocument(units: Array("abcd\n\n<div>raw</div>\n".utf16))
+        let accepted = try #require(BlockSerializer.edit(doc, inputType: "insertText", data: "x", selection: 3..<3, target: 1..<1, pending: nil))
+        #expect(accepted.document.units == Array("abcxd\n\n<div>raw</div>\n".utf16))
+        for forged in [8..<8, 0..<8, -1..<2, 66..<67] {
+            #expect(BlockSerializer.edit(doc, inputType: "insertText", data: "x", selection: 3..<3, target: forged, pending: nil) == nil)
+        }
+    }
+
     @Test func refusals() {
-        for (input, type) in [("a‸b", "insertParagraph"), ("a‸b", "insertFromPaste"), ("a‸b", "formatBold"), ("a\n\n‸b", "deleteContentBackward"), ("a⟦b\n\nc⟧d", "deleteContentBackward"), ("```\nx‸\n```", "insertText"), ("| h‸ |\n|---|\n", "insertText"), ("<div>x‸</div>", "insertText"), ("a &a‸mp; b", "insertText")] {
+        for (input, type) in [("⟦foo⟧  bar", "deleteContentBackward"), ("a‸b", "insertParagraph"), ("a‸b", "insertFromPaste"), ("a‸b", "formatBold"), ("a\n\n‸b", "deleteContentBackward"), ("a⟦b\n\nc⟧d", "deleteContentBackward"), ("```\nx‸\n```", "insertText"), ("| h‸ |\n|---|\n", "insertText"), ("<div>x‸</div>", "insertText"), ("a &a‸mp; b", "insertText")] {
             let (text, selection) = marked(input)
             let doc = IncrementalDocument(units: Array(text.utf16))
             #expect(BlockSerializer.edit(doc, inputType: type, data: "x", selection: selection, target: nil, pending: nil) == nil, "\(input) \(type)")

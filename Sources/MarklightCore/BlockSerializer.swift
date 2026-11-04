@@ -34,7 +34,7 @@ public enum BlockSerializer {
             deletion = true
         default: return nil
         }
-        let range = target ?? selection
+        let range = inputType == "insertText" ? selection : target ?? selection
         guard range.lowerBound <= selection.upperBound, selection.lowerBound <= range.upperBound else { return nil }
         let start = range.lowerBound
         let index = doc.containing(start) ?? (start > 0 ? doc.containing(start - 1) : nil)
@@ -47,6 +47,11 @@ public enum BlockSerializer {
                   let hi = boundary(range.upperBound, in: leaf, span: span),
                   boundary(selection.lowerBound, in: leaf, span: span) != nil,
                   boundary(selection.upperBound, in: leaf, span: span) != nil else { return nil }
+            if let target {
+                guard let a = boundary(target.lowerBound, in: leaf, span: span),
+                      let b = boundary(target.upperBound, in: leaf, span: span),
+                      !leaf.atoms[a..<b].contains(where: { $0.kind == .object }) else { return nil }
+            }
             var cut = lo..<hi
             if deletion && cut.isEmpty {
                 guard (inputType == "deleteContentBackward" || inputType == "deleteContentForward"),
@@ -68,7 +73,7 @@ public enum BlockSerializer {
             }
             return nil
         }
-        guard !deletion, range.isEmpty, range == selection, start == pending || (start == 0 && doc.units.isEmpty) else { return nil }
+        guard !deletion, range.isEmpty, range == selection, target == nil || target == selection, start == pending || (start == 0 && doc.units.isEmpty) else { return nil }
         return LeafEdit(doc: doc, topIndex: nil, top: nil, leaf: nil, span: range).replacing(0..<0, with: insertion, marks: [])
     }
 
@@ -131,7 +136,7 @@ private struct LeafEdit {
         var expected = leaf?.atoms ?? []
         let fresh = text.map { Atom(kind: .text, unit: $0, marks: marks, range: 0..<0) }
         expected.replaceSubrange(cut, with: fresh)
-        var caretIndex = cut.lowerBound + fresh.count
+        let caretIndex = cut.lowerBound + fresh.count
         // Markdown cannot express whitespace just inside an emphasis delimiter.
         for i in expected.indices where expected[i].unit.isSpaceOrTab {
             let before = expected[i].marks
@@ -144,12 +149,23 @@ private struct LeafEdit {
             }
             expected[i].marks = kept
         }
-        if leaf?.kind == .paragraph, !cut.isEmpty {
-            while expected.first?.unit.isSpaceOrTab == true { expected.removeFirst(); caretIndex = max(0, caretIndex - 1) }
+        let original = leaf?.atoms ?? []
+        let adjacent = max(0, cut.lowerBound - 1)..<min(original.count, cut.upperBound + 1)
+        let affected = Set(original[adjacent].flatMap(\.marks) + marks)
+        var attempts: [Spelling] = [.raw, .inline, .block, .widerCode, .alternateMarks]
+        // The new punctuation may pair with an existing literal (notably a
+        // backtick). Retry one original character at a time, nearest first.
+        // If none works, refuse rather than rewriting unrelated punctuation.
+        for distance in 0..<expected.count {
+            for i in [cut.lowerBound - 1 - distance, cut.lowerBound + fresh.count + distance]
+                where expected.indices.contains(i) && expected[i].range.count == 1 && Self.specials.contains(expected[i].unit) {
+                attempts.append(.escapeOne(i))
+            }
+            if attempts.count >= 13 { break }
         }
         var previous: [UInt16]?
-        for mode in Spelling.allCases {
-            var written = spelling(expected, mode: mode)
+        for mode in attempts {
+            var written = spelling(expected, mode: mode, affected: affected)
             if let leaf, case .item = leaf.kind, leaf.children.isEmpty, span.lowerBound > 0,
                !doc.units[span.lowerBound - 1].isSpaceOrTab { written.insert(32, at: 0) }
             if previous == written { continue }
@@ -164,45 +180,33 @@ private struct LeafEdit {
         return nil
     }
 
-    private enum Spelling: CaseIterable { case raw, escaped, widerCode, alternateMarks, escapeNearby }
+    private enum Spelling: Equatable { case raw, inline, block, widerCode, alternateMarks, escapeOne(Int) }
+    private static let inlineSyntax = Set(#"\*`_[]<>&~|"#.utf16)
+    private static let specials = inlineSyntax.union("#-+>=.!:)".utf16)
 
-    private func spelling(_ atoms: [Atom], mode: Spelling) -> [UInt16] {
+    private func spelling(_ atoms: [Atom], mode: Spelling, affected: Set<Mark>) -> [UInt16] {
         var out: [UInt16] = [], stack: [Mark] = []
-        let syntax = Set(#"\*`_[]<>&~|"#.utf16)
-        let startsBlock = Set("#-+>=.!:)".utf16)
         var overrides: [Int: ([UInt16], [UInt16])] = [:]
-        for a in atoms where a.range.isEmpty {
-            for mark in a.marks where overrides[mark.id] == nil {
-                if case .link = mark.kind, mark.open == [91], mark.close == [93] || mark.close == [93,91,93],
-                   let node = leaf.flatMap({ linkNode($0.inlines, mark: mark) }) {
-                    let label = doc.units[(node.range.lowerBound + 1)..<(node.range.upperBound - mark.close.count)]
-                    overrides[mark.id] = (mark.open, [93,91] + label + [93])
-                } else if mode == .widerCode, mark.kind == .code {
-                    let content = atoms.filter { $0.marks.contains(mark) }.map(\.unit)
-                    var run = 0, longest = 0
-                    for u in content { run = u == 96 ? run + 1 : 0; longest = max(longest, run) }
-                    let fence = [UInt16](repeating: 96, count: longest + 1)
-                    let pad: [UInt16] = content.first == 96 || content.last == 96 ? [32] : []
-                    overrides[mark.id] = (fence + pad, pad + fence)
-                }
-            }
-        }
-        // Deleting within a shortcut link also changes its lookup label.
-        if let leaf {
-            for inline in allLinks(leaf.inlines) {
-                guard case .mark(let mark) = inline.kind, mark.close == [93] || mark.close == [93,91,93],
-                      overrides[mark.id] == nil else { continue }
-                let old = leaf.atoms[inline.atoms]
+        for mark in affected {
+            if case .link = mark.kind, mark.open == [91], mark.close == [93] || mark.close == [93, 91, 93],
+               let leaf, let link = linkNode(leaf.inlines, mark: mark) {
                 let kept = atoms.filter { $0.marks.contains(mark) }
-                if kept.count != old.count {
-                    overrides[mark.id] = (mark.open, [93,91] + doc.units[(inline.range.lowerBound + 1)..<(inline.range.upperBound - mark.close.count)] + [93])
-                }
+                guard kept.count != link.atoms.count || kept.contains(where: { $0.range.isEmpty }) else { continue }
+                let label = doc.units[(link.range.lowerBound + 1)..<(link.range.upperBound - mark.close.count)]
+                overrides[mark.id] = (mark.open, [93, 91] + label + [93])
+            } else if mode == .widerCode, mark.kind == .code {
+                let content = atoms.filter { $0.marks.contains(mark) }.map(\.unit)
+                var run = 0, longest = 0
+                for u in content { run = u == 96 ? run + 1 : 0; longest = max(longest, run) }
+                let fence = [UInt16](repeating: 96, count: longest + 1)
+                let pad: [UInt16] = content.first == 96 || content.last == 96 ? [32] : []
+                overrides[mark.id] = (fence + pad, pad + fence)
             }
         }
         func delimiter(_ mark: Mark, opening: Bool) -> [UInt16] {
             if let pair = overrides[mark.id] { return opening ? pair.0 : pair.1 }
             let original = opening ? mark.open : mark.close
-            return mode == .alternateMarks && original.first == 95 ? original.map { _ in 42 } : original
+            return mode == .alternateMarks && affected.contains(mark) && original.first == 95 ? original.map { _ in 42 } : original
         }
         var i = 0
         while i < atoms.count {
@@ -211,9 +215,9 @@ private struct LeafEdit {
             for m in stack[keep...].reversed() { out += delimiter(m, opening: false) }
             for m in a.marks[keep...] { out += delimiter(m, opening: true) }
             stack = a.marks
-            let special = syntax.contains(a.unit) || startsBlock.contains(a.unit)
-            let escape = mode != .raw && !stack.contains(where: { $0.kind == .code }) && special &&
-                (a.range.isEmpty || mode == .escapeNearby && a.range.count == 1 && syntax.contains(a.unit))
+            let special = mode == .inline ? Self.inlineSyntax.contains(a.unit) : Self.specials.contains(a.unit)
+            let escape = mode != .raw && !stack.contains(where: { $0.kind == .code }) &&
+                (a.range.isEmpty && special || mode == .escapeOne(i))
             if escape { out.append(92) }
             if a.range.isEmpty { out.append(a.unit) }
             else { out += doc.units[a.range] }
@@ -226,16 +230,12 @@ private struct LeafEdit {
         return out
     }
 
-    private func allLinks(_ inlines: [Inline]) -> [Inline] {
-        inlines.flatMap { node -> [Inline] in
-            let children = allLinks(node.children)
-            if case .mark(let m) = node.kind, case .link = m.kind { return [node] + children }
-            return children
-        }
-    }
-
     private func linkNode(_ inlines: [Inline], mark: Mark) -> Inline? {
-        allLinks(inlines).first { if case .mark(let m) = $0.kind { return m == mark }; return false }
+        for node in inlines {
+            if case .mark(let m) = node.kind, m == mark { return node }
+            if let nested = linkNode(node.children, mark: mark) { return nested }
+        }
+        return nil
     }
 
     private func verified(_ candidate: IncrementalDocument, patch: Patch, expected: [Atom], caretIndex: Int) -> (caret: Int, pending: Int?)? {
@@ -244,19 +244,28 @@ private struct LeafEdit {
         var resultLeaf: Block?
         func sameText(_ actual: Block) -> Bool {
             guard !actual.isOpaque, actual.atoms.count == expected.count else { return false }
+            var groups: [Int: Int] = [:], inverse: [Int: Int] = [:]
             for (a, b) in zip(expected, actual.atoms) {
                 let aKind = a.kind == .ignored ? .text : a.kind
                 let bKind = b.kind == .ignored ? .text : b.kind
                 guard aKind == bKind, a.unit == b.unit else { return false }
-                func semantic(_ m: Mark) -> Mark.Kind? {
-                    if case .link = m.kind {
-                        if m.open.isEmpty { return nil } // GFM bare URLs derive their target from the text.
-                        if m.open == [60] { return .link(destination: "") }
-                    }
-                    return m.kind
+                // GFM bare URLs derive their link from the displayed text.
+                func explicit(_ m: Mark) -> Bool {
+                    if case .link = m.kind { return !m.open.isEmpty }
+                    return true
                 }
-                let x = a.marks.compactMap(semantic), y = b.marks.compactMap(semantic)
-                guard x == y else { return false }
+                let x = a.marks.filter(explicit), y = b.marks.filter(explicit)
+                guard x.count == y.count else { return false }
+                for (old, new) in zip(x, y) {
+                    if case .link(let x) = old.kind, case .link(let y) = new.kind {
+                        if old.open == [60] { guard new.open == [60] else { return false } }
+                        else if !x.utf8.elementsEqual(y.utf8) { return false }
+                    } else if old.kind != new.kind { return false }
+                    if let id = groups[old.id], id != new.id { return false }
+                    if let id = inverse[new.id], id != old.id { return false }
+                    groups[old.id] = new.id
+                    inverse[new.id] = old.id
+                }
                 if a.kind == .object, !doc.units[a.range].elementsEqual(candidate.units[b.range]) { return false }
             }
             resultLeaf = actual
