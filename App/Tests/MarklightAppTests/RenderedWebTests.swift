@@ -458,6 +458,9 @@ extension PreviewSuites {
             try await checkFresh(h)
             h.window.makeFirstResponder(h.textView)
             h.textView.setSelectedRange(NSRange(location: 0, length: 0))
+            var sourcePatch: Patch?
+            let token = h.doc.buffer.addObserver { if $0.origin == .source { sourcePatch = $0 } }
+            defer { h.doc.buffer.removeObserver(token) }
             key(h, "Y")
             #expect(await pump(until: { h.doc.buffer.text == "YaXb\r\n" }))
             try await h.settle()
@@ -471,6 +474,9 @@ extension PreviewSuites {
             key(h, "Z", code: 6, flags: [.command, .shift])
             try await waitForAck(h, 3)
             #expect(h.doc.buffer.text == "YaXb\r\n")
+            let caret = try await h.js("return marklight.selection()") as? [Int]
+            #expect(caret == [1, 1], "after redoing the source Y at 0, source patch was \(String(describing: sourcePatch))")
+            #expect(h.pane.updater.pending == nil)
             try await checkFresh(h)
 
             // The test process is never the active app. Give the real Edit menu
