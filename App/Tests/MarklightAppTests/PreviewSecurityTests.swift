@@ -387,7 +387,7 @@ struct PreviewSecurityTests {
         };
         """)
         let attack = TextCodec.decode(try Data(contentsOf: tree.document)).units
-        try h.doc.buffer.apply(Patch(range: 0..<0, replacement: attack, origin: .source))
+        try h.doc.buffer.apply(Patch(range: 0..<0, replacement: attack, origin: .command))
         try await h.settle()
         await pump(for: 1)
 

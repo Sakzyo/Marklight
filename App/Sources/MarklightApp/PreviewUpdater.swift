@@ -50,7 +50,7 @@ final class PreviewUpdater {
     }
 
     /// Whether the page shows the text in the buffer now.
-    var isCurrent: Bool { isPageReady && !needsLoad && shownVersion == buffer.version }
+    var isCurrent: Bool { isPageReady && !needsLoad && !isUpdating && shownVersion == buffer.version }
 
     /// A hidden preview does no work. It catches up when it's shown again.
     func setPaused(_ paused: Bool) {

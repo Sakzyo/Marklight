@@ -111,7 +111,8 @@
     }
     if (first === null) return [];
     const inner = [];
-    let el = document.elementFromPoint(root.getBoundingClientRect().left + 40, 1);
+    const column = root.getBoundingClientRect();
+    let el = document.elementFromPoint(column.left + column.width / 2, 1);
     while (el && el !== root && root.contains(el)) {
       inner.push(el);
       el = el.parentElement;

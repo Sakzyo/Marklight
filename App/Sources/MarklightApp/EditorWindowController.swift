@@ -28,6 +28,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     private var followingPreview = false
     private var pendingReveal: DispatchWorkItem?
     private var selectionObserver: NSObjectProtocol?
+    /// The selection and text version at the last selection change, to tell a
+    /// caret move from an edit that carried the caret along.
+    private var lastSelection = NSRange(location: 0, length: 0)
+    private var lastSelectionVersion = 0
     /// How long the source caret rests before the preview follows it.
     static let revealDelay = 0.05
 
@@ -52,6 +56,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         window.delegate = self
         selectionObserver = NotificationCenter.default.addObserver(forName: NSTextView.didChangeSelectionNotification, object: editor.textView,
                                                                    queue: nil) { [weak self] _ in self?.sourceSelectionChanged() }
+        lastSelection = editor.textView.selectedRange()
+        lastSelectionVersion = buffer.version
     }
 
     @available(*, unavailable)
@@ -139,8 +145,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     // MARK: - Selection sync
 
+    /// Only a caret move on its own scrolls the preview. An edit moves the caret
+    /// too, but then the preview has to hold still, or scroll anchoring would be
+    /// undone by the next keystroke.
     private func sourceSelectionChanged() {
-        guard !followingPreview, layout == .split else { return }
+        let selection = editor.textView.selectedRange()
+        let textChanged = buffer.version != lastSelectionVersion
+        let moved = selection != lastSelection
+        lastSelection = selection
+        lastSelectionVersion = buffer.version
+        guard moved, !textChanged, !followingPreview, !editor.isComposing, layout == .split else { return }
         pendingReveal?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
