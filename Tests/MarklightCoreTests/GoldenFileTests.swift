@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import MarklightCore
@@ -18,15 +19,48 @@ enum Fixtures {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         return names.filter { !$0.hasPrefix(".") }.sorted()
     }
+
+    static func data(_ name: String) throws -> Data {
+        try Data(contentsOf: directory.appendingPathComponent(name))
+    }
+}
+
+func sha256(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
 @Suite("Golden files")
 struct GoldenFileTests {
     @Test("Open, no-op, save is byte-identical", arguments: Fixtures.all)
     func noOpRoundTrip(name: String) throws {
-        let original = try Data(contentsOf: Fixtures.directory.appendingPathComponent(name))
+        let original = try Fixtures.data(name)
         let buffer = Buffer(contentsOf: original)
-        #expect(buffer.serialized() == original, "\(name) changed on no-op save")
+        #expect(sha256(buffer.serialized()) == sha256(original), "\(name) changed on no-op save")
+    }
+
+    @Test("Decoding then encoding is byte-identical, without the saved-bytes shortcut", arguments: Fixtures.all)
+    func encoderRoundTrip(name: String) throws {
+        let original = try Fixtures.data(name)
+        let decoded = TextCodec.decode(original)
+        #expect(decoded.format.encoding != .raw, "\(name) fell back to raw")
+        #expect(TextCodec.encode(decoded.units, format: decoded.format) == original, "\(name) changed by the encoder")
+    }
+
+    @Test("An edit changes only its range, and undo restores the bytes", arguments: Fixtures.all)
+    func editAndUndo(name: String) throws {
+        let original = try Fixtures.data(name)
+        let buffer = Buffer(contentsOf: original)
+        let at = buffer.units.count / 2
+        let offset = (0xDC00..<0xE000).contains(at < buffer.units.count ? buffer.units[at] : 0) ? at + 1 : at
+        let text = Array("✏️".utf16)
+        try buffer.apply(Patch(range: offset..<offset, replacement: text, origin: .source))
+        #expect(buffer.isDirty)
+        #expect(Array(buffer.units[offset..<offset + text.count]) == text)
+        buffer.undo()
+        #expect(!buffer.isDirty)
+        #expect(buffer.serialized() == original)
+        buffer.redo()
+        #expect(buffer.isDirty)
     }
 
     @Test("Fixtures folder exists")
