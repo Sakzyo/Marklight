@@ -355,6 +355,13 @@ struct DocumentTests {
         #expect(view.usesFindBar)
     }
 
+    @Test("A file opens with the caret at the start", arguments: ["# Title\n\nBody\n", "x", ""])
+    func caretOnOpen(text: String) throws {
+        let (doc, view, _) = try open(try file(text, try makeFolder()))
+        defer { doc.close() }
+        #expect(view.selectedRange() == NSRange(location: 0, length: 0))
+    }
+
     @Test func theMenuReachesItsActions() {
         _ = NSApplication.shared
         let menu = MainMenu.make()

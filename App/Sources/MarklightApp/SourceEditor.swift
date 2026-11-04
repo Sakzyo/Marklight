@@ -26,6 +26,7 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         textView.editor = self
         textView.textStorage?.delegate = self
         syncStorage()
+        textView.setSelectedRange(NSRange(location: 0, length: 0)) // setting the text leaves the caret at the end
         observer = buffer.addObserver { [weak self] patch in
             guard let self else { return }
             if patch.origin != .source { apply(patch) }
