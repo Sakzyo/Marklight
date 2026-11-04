@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MarklightCore
+import Testing
 import WebKit
 @testable import MarklightApp
 
@@ -38,9 +39,28 @@ func makeTemporaryFolder() throws -> URL {
     _ = await pump(until: { false }, timeout: seconds)
 }
 
+/// Every suite that opens a web view, so they run one at a time. On top of each
+/// other they fight over the main thread, and a pause in one upsets another's timing.
+@Suite("Preview", .serialized) enum PreviewSuites {}
+
 struct HarnessFailure: Error, CustomStringConvertible {
     let description: String
 }
+
+/// Harnesses open now. `swift test` runs on Swift's async main, which calls
+/// `exit(0)` if anything stops the main run loop, and the test run then ends early
+/// and reports success with no summary. `NSButton.performClick` does exactly that,
+/// so use `sendAction` in tests. An exit with a test still open is turned into a
+/// failure that can't be missed.
+nonisolated(unsafe) private var openHarnesses = 0
+
+private let failOnEarlyExit: Void = {
+    atexit {
+        guard openHarnesses > 0 else { return }
+        fputs("error: the test process exited with \(openHarnesses) preview tests still running\n", stderr)
+        _exit(70)
+    }
+}()
 
 /// A document in a real window with a real preview. The window is on screen but
 /// invisible, so layout and mouse events are real. Hold on to this for the whole
@@ -56,9 +76,11 @@ struct HarnessFailure: Error, CustomStringConvertible {
     init(url: URL, layout: PaneLayout = .split, size: NSSize = NSSize(width: 1000, height: 700),
          defences: PreviewDefences = PreviewDefences()) throws {
         _ = NSApplication.shared
+        _ = failOnEarlyExit
         doc = try MarkdownDocument(contentsOf: url, ofType: MarkdownDocument.markdownType)
         controller = EditorWindowController(document: doc, layout: layout, defences: defences)
         doc.addWindowController(controller)
+        openHarnesses += 1
         controller.window!.alphaValue = 0
         controller.window!.setContentSize(size)
         controller.window!.orderFrontRegardless()
@@ -76,6 +98,7 @@ struct HarnessFailure: Error, CustomStringConvertible {
         window.orderOut(nil)
         doc.close()
         PaneLayout.forget()
+        openHarnesses -= 1
     }
 
     /// Waits for the page to show the buffer's text. A failure here is a real one:

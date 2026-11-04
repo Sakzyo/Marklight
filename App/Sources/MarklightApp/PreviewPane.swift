@@ -278,10 +278,8 @@ final class PreviewWebView: WKWebView {
 
     static func filter(_ menu: NSMenu) {
         for item in menu.items where !item.isSeparatorItem {
-            guard let id = item.identifier?.rawValue, allowedMenuItems.contains(id) else {
-                menu.removeItem(item)
-                continue
-            }
+            if let id = item.identifier?.rawValue, allowedMenuItems.contains(id) { continue }
+            menu.removeItem(item)
         }
         // Separators left at the ends or side by side.
         var previousWasSeparator = true

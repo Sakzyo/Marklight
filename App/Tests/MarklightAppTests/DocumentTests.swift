@@ -359,7 +359,7 @@ struct DocumentTests {
         _ = NSApplication.shared
         let menu = MainMenu.make()
         let titles = menu.items.compactMap { $0.submenu?.title }
-        #expect(titles == ["Marklight", "File", "Edit", "Window"])
+        #expect(titles == ["Marklight", "File", "Edit", "View", "Window"])
         let edit = menu.items[2].submenu!
         #expect(edit.item(withTitle: "Undo")?.action == #selector(SourceTextView.undo(_:)))
         #expect(edit.item(withTitle: "Find")?.submenu?.items.count == 5)
