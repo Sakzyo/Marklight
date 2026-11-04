@@ -6,6 +6,7 @@ enum MainMenu {
         main.addItem(submenu(appMenu()))
         main.addItem(submenu(fileMenu()))
         main.addItem(submenu(editMenu()))
+        main.addItem(submenu(viewMenu()))
         let window = windowMenu()
         main.addItem(submenu(window))
         NSApp.windowsMenu = window
@@ -73,6 +74,14 @@ enum MainMenu {
         add("Use Selection for Find", .setSearchString, key: "e")
         find.submenu = findMenu
         menu.addItem(find)
+        return menu
+    }
+
+    private static func viewMenu() -> NSMenu {
+        let menu = NSMenu(title: "View")
+        menu.addItem(withTitle: "Source", action: #selector(EditorWindowController.showSourceLayout(_:)), keyEquivalent: "1")
+        menu.addItem(withTitle: "Preview", action: #selector(EditorWindowController.showPreviewLayout(_:)), keyEquivalent: "2")
+        menu.addItem(withTitle: "Split", action: #selector(EditorWindowController.showSplitLayout(_:)), keyEquivalent: "3")
         return menu
     }
 
