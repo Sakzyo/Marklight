@@ -6,7 +6,7 @@ import WebKit
 @testable import MarklightApp
 
 /// WebKit ignores ordinary keys in the test process's inactive window.
-private final class RenderedKeyWindow: NSWindow {
+final class RenderedKeyWindow: NSWindow {
     override var isKeyWindow: Bool { true }
 }
 
@@ -32,7 +32,7 @@ private func unpack(_ marked: String) -> (text: String, selection: [Int]) {
     return (String(decoding: units, as: UTF16.self), [start, end])
 }
 
-@MainActor private func key(_ h: PreviewHarness, _ chars: String, code: UInt16 = 0, flags: NSEvent.ModifierFlags = []) {
+@MainActor func key(_ h: PreviewHarness, _ chars: String, code: UInt16 = 0, flags: NSEvent.ModifierFlags = []) {
     for type in [NSEvent.EventType.keyDown, .keyUp] {
         let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                  windowNumber: h.window.windowNumber, context: nil, characters: chars,
@@ -68,15 +68,15 @@ private func unpack(_ marked: String) -> (text: String, selection: [Int]) {
 
 /// Compare the live DOM to HTML produced by an independent full parse. Do this
 /// after observing the live caret and node identity; load replaces their nodes.
-@MainActor private func checkFresh(_ h: PreviewHarness) async throws {
+@MainActor private func checkFresh(_ h: PreviewHarness, pending: Int? = nil) async throws {
     let live = try await h.dom()
     let selection = try await h.js("return marklight.selection()") as? [Int]
-    let full = HTMLRenderer.render(ParsedDocument(units: h.doc.buffer.units))
+    let full = HTMLRenderer.render(IncrementalDocument(units: h.doc.buffer.units), pending: pending)
     let list = full.blocks.map { ["html": $0.html, "base": $0.base] as [String: Any] }
     _ = try await h.js("marklight.load(list, v, start, end)", [
         "list": list, "v": h.doc.buffer.version, "start": selection?.first as Any? ?? NSNull(), "end": selection?.last as Any? ?? NSNull(),
     ])
-    #expect(try await h.dom() == live)
+    #expect(try await h.dom().utf8.elementsEqual(live.utf8))
     #expect(Array(h.textView.string.utf16) == h.doc.buffer.units)
 }
 
@@ -136,6 +136,7 @@ extension PreviewSuites {
                 try await waitForAck(h, 1)
                 #expect(h.doc.buffer.units == Array(before.replacingOccurrences(of: "a", with: "").utf16))
                 #expect(try await h.js("return !!document.querySelector('[data-caret] > br')") as? Bool == true)
+                try await checkFresh(h, pending: at[0] - 1)
                 key(h, "z")
                 try await waitForAck(h, 2)
                 #expect(h.doc.buffer.units == Array(before.replacingOccurrences(of: "a", with: "z").utf16))
