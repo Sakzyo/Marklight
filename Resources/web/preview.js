@@ -448,6 +448,27 @@
     }
   }
 
+  // WebKit treats a link inside an editing host as text, even for a Cmd-click.
+  // Give just this gesture a native link so WKNavigationDelegate receives the
+  // real linkActivated action with its original modifier flags and URL.
+  let followingLink = null;
+  function finishLinkGesture() {
+    if (followingLink) followingLink.removeAttribute('contenteditable');
+    followingLink = null;
+  }
+  root.addEventListener('pointerdown', e => {
+    finishLinkGesture();
+    const link = e.target.closest?.('a[href]');
+    if (e.isTrusted && e.metaKey && e.button === 0 && link?.isContentEditable) {
+      followingLink = link;
+      link.contentEditable = 'false';
+    }
+  }, true);
+  document.addEventListener('pointerup', () => {
+    if (followingLink) setTimeout(finishLinkGesture, 0);
+  }, true);
+  document.addEventListener('pointercancel', finishLinkGesture, true);
+
   document.addEventListener('click', e => {
     const link = e.target.closest && e.target.closest('a[href], area[href]');
     if (!link) return;
