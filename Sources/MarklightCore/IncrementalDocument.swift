@@ -13,7 +13,7 @@ public struct IncrementalDocument {
     public let usedFullParse: Bool
     let changedBlock: Int?
     private var entries: [Entry]
-    private let globalContext: Bool
+    private let references: ReferenceContext?
     public var blockCount: Int { entries.count }
 
     public init(units: [UInt16]) {
@@ -22,18 +22,66 @@ public struct IncrementalDocument {
         entries = parsed.root.children.map { Entry(tree: $0, offset: 0) }
         usedFullParse = true
         changedBlock = nil
-        // cmark resolves definitions globally and caps their total expansion by
-        // document size. A previously unclosed YAML fence can close far below.
-        globalContext = Self.mayDefineReference(units[...]) ||
-            (units.starts(with: [45, 45, 45]) && parsed.root.children.first?.kind != .frontMatter)
+        // An initially unclosed YAML fence can close far below this edit.
+        references = units.starts(with: [45, 45, 45]) && parsed.root.children.first?.kind != .frontMatter
+            ? nil : ReferenceContext(units: units, blocks: parsed.root.children)
     }
 
-    private init(units: [UInt16], entries: [Entry], edited: Int) {
+    private init(units: [UInt16], entries: [Entry], edited: Int, references: ReferenceContext) {
         self.units = units
         self.entries = entries
         usedFullParse = false
         changedBlock = edited
-        globalContext = false
+        self.references = references
+    }
+
+    /// Only standalone definition-only paragraphs omitted from the full tree
+    /// can be replayed independently. Fall back for titles, multiline labels,
+    /// container definitions, escapes, entities and ambiguous literal syntax.
+    private struct ReferenceContext {
+        var prefix: [UInt16] = []
+        var longestURL = 0
+        var brackets = 0
+
+        init?(units: [UInt16], blocks: [Block]) {
+            guard IncrementalDocument.mayDefineReference(units[...]) else { return }
+            let simple = /^\[([A-Za-z0-9_.-]{1,999})\]:[ \t]+([A-Za-z0-9\/:_.?%#+=~-]+)[ \t]*$/
+            var line = 0, block = 0, previousAllowsDefinition = true, previousWasDefinition = false
+            while line < units.count {
+                let end = units.lineEnd(from: line)
+                let bytes = units[line..<end]
+                let blank = bytes.allSatisfy(\.isSpaceOrTab)
+                let marker = IncrementalDocument.mayDefineReference(bytes)
+                if marker {
+                    while block < blocks.count && blocks[block].range.upperBound <= line { block += 1 }
+                    guard previousAllowsDefinition, block == blocks.count || blocks[block].range.lowerBound >= end,
+                          bytes.count + prefix.count < 8192, bytes.allSatisfy({ $0 < 128 }),
+                          let match = String(decoding: bytes, as: UTF16.self).wholeMatch(of: simple) else { return nil }
+                    prefix += bytes
+                    prefix.append(10)
+                    longestURL = max(longestURL, match.2.utf8.count)
+                } else if previousWasDefinition && !blank { return nil }
+                previousWasDefinition = marker
+                previousAllowsDefinition = marker || blank
+                brackets += bytes.count(where: { $0 == 93 })
+                line = units.afterLineBreak(end)
+            }
+            // Old distant links may already have exhausted the budget. Removing
+            // a lookup could then change those links, outside the edit window.
+            guard longestURL > 0, brackets <= 100_000 / longestURL else { return nil }
+            prefix.append(10)
+        }
+
+        func applying(_ patch: Patch, removed: ArraySlice<UInt16>) -> Self? {
+            guard longestURL > 0 else { return self }
+            var next = self
+            next.brackets += patch.replacement.count(where: { $0 == 93 }) - removed.count(where: { $0 == 93 })
+            // cmark-gfm 0.9: handle_close_bracket takes at most one map lookup
+            // per source ']'. Its charge is URL + title bytes. All definitions
+            // here are ASCII, title-free, and have no URL escapes. The 100 KB
+            // minimum budget applies to both full and window parses.
+            return next.brackets <= 100_000 / longestURL ? next : nil
+        }
     }
 
     private static func mayDefineReference(_ slice: ArraySlice<UInt16>) -> Bool {
@@ -55,7 +103,7 @@ public struct IncrementalDocument {
     public func applying(_ patch: Patch) -> Self {
         var next = units
         next.replaceSubrange(patch.range, with: patch.replacement)
-        guard !globalContext, !patch.replacement.contains(where: \.isLineBreak),
+        guard let context = references?.applying(patch, removed: units[patch.range]), !patch.replacement.contains(where: \.isLineBreak),
               !units[patch.range].contains(where: \.isLineBreak),
               let edited = containing(patch.range.lowerBound),
               entries[edited].range.upperBound >= patch.range.upperBound else { return Self(units: next) }
@@ -70,11 +118,11 @@ public struct IncrementalDocument {
         // The entire physical lines belong to the window. The guards must
         // survive the reparse exactly, including their ranges and inline marks.
         guard start <= patch.range.lowerBound, patch.range.upperBound <= end,
-              !Self.mayDefineReference(next[start..<(end + delta)]),
-              !(start == 0 && next.starts(with: [45, 45, 45])) else { return Self(units: next) }
+              !Self.mayDefineReference(units[start..<end]), !Self.mayDefineReference(next[start..<(end + delta)]),
+              !(start == 0 && (next.starts(with: [45, 45, 45]) || next.first == 0xFEFF && !context.prefix.isEmpty)) else { return Self(units: next) }
         // A leading blank line at an interior restart prevents synthetic BOM
         // stripping and YAML front matter detection in the middle of the file.
-        let prefix: [UInt16] = start == 0 ? [] : [10]
+        let prefix: [UInt16] = context.prefix.isEmpty && start != 0 ? [10] : context.prefix
         let window = ParsedDocument(units: prefix + next[start..<(end + delta)])
         let trees = window.root.children
         let base = start - prefix.count
@@ -94,7 +142,7 @@ public struct IncrementalDocument {
         if delta != 0 {
             for index in result.indices where index > edited { result[index].offset += delta }
         }
-        return Self(units: next, entries: result, edited: edited)
+        return Self(units: next, entries: result, edited: edited, references: context)
     }
 
     /// Find the first top-level block ending at or beyond the caret.
