@@ -76,7 +76,10 @@ private func unpack(_ marked: String) -> (text: String, selection: [Int]) {
     _ = try await h.js("marklight.load(list, v, start, end)", [
         "list": list, "v": h.doc.buffer.version, "start": selection?.first as Any? ?? NSNull(), "end": selection?.last as Any? ?? NSNull(),
     ])
-    #expect(try await h.dom().utf8.elementsEqual(live.utf8))
+    let fresh = try await h.dom()
+    if !fresh.utf8.elementsEqual(live.utf8) {
+        Issue.record("DOM for \(h.doc.buffer.text.prefix(60).debugDescription) at version \(h.doc.buffer.version) differs. Live \(live.prefix(650)); fresh \(fresh.prefix(650))")
+    }
     #expect(Array(h.textView.string.utf16) == h.doc.buffer.units)
 }
 
@@ -213,6 +216,90 @@ extension PreviewSuites {
                 #expect(h.doc.buffer.units == Array(text.utf16))
                 try await checkFresh(h)
             }
+        }
+
+        @Test("Backspace on focusable raw HTML cannot use an old editable caret")
+        func rawFocus() async throws {
+            let source = "editable text\n\n<div><a tabindex='0' style='-webkit-user-modify:read-write !important' href='https://example.com/'>raw</a></div>"
+            let h = try PreviewHarness(text: source, windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            var beeps = 0
+            h.pane.beep = { beeps += 1 }
+            try await beginEditing(h, at: [4, 4])
+            let protected = try await h.js("""
+            const a = document.querySelector('[data-raw] a');
+            a.focus();
+            getSelection().removeAllRanges();
+            return document.activeElement === a && !a.isContentEditable && getComputedStyle(a).webkitUserModify === 'read-only';
+            """) as? Bool
+            #expect(protected == true)
+            key(h, "\u{7f}", code: 51)
+            try await waitForAck(h, 1)
+            #expect(beeps == 1)
+            #expect(h.doc.buffer.units == Array(source.utf16))
+            try await checkFresh(h)
+        }
+
+        @Test("A raw image map opens only on Cmd-click")
+        func imageMapLink() async throws {
+            let folder = try makeTemporaryFolder()
+            let image = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="))
+            try image.write(to: folder.appendingPathComponent("dot.png"))
+            let file = folder.appendingPathComponent("map.md")
+            try Data("""
+            <div><img src="dot.png" width="80" height="60" usemap="#targets">
+            <map name="targets"><area shape="default" href="https://example.com/map"></map></div>
+            """.utf8).write(to: file)
+            let h = try PreviewHarness(url: file, windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            var opened: [String] = []
+            h.pane.openExternal = { opened.append($0.absoluteString) }
+            try await h.settle()
+            let point = try await h.center(of: "[data-raw] img")
+            await h.click(x: point.x, y: point.y)
+            await pump(for: 0.12)
+            #expect(opened.isEmpty)
+            await h.click(x: point.x, y: point.y, modifiers: .command)
+            #expect(await pump(until: { opened.count == 1 }, timeout: 2))
+            #expect(opened == ["https://example.com/map"])
+        }
+
+        @Test("A full reload discards keys queued against an old document and ignores its late composition end")
+        func fullReload() async throws {
+            let h = try PreviewHarness(text: "old text", windowClass: RenderedKeyWindow.self)
+            defer { h.close() }
+            try await beginEditing(h, at: [4, 4])
+            _ = try await h.js("""
+            window.acknowledge = marklight.done;
+            marklight.done = () => { window.hasReply = true; };
+            """)
+            key(h, "X")
+            #expect(await pump(until: { h.doc.buffer.text == "old Xtext" }))
+            try await h.settle()
+            key(h, "Y")
+            await pump(for: 0.04)
+            let reset = "different document"
+            h.doc.buffer.reload(contentsOf: Data(reset.utf8))
+            h.pane.updater.pageReady()
+            try await h.settle()
+            #expect(try await h.js("return window.hasReply") as? Bool == true)
+            _ = try await h.js("marklight.done = acknowledge; marklight.done()")
+            await pump(for: 0.12)
+            #expect(h.doc.buffer.text == reset)
+            try await checkFresh(h)
+
+            _ = try await h.js("document.querySelector('#doc').focus(); marklight.select(3, 3)")
+            let client = try #require(h.webView as Any as? NSTextInputClient)
+            client.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+            await pump(for: 0.05)
+            let final = "newer contents"
+            h.doc.buffer.reload(contentsOf: Data(final.utf8))
+            h.pane.updater.pageReady()
+            try await h.settle()
+            _ = try await h.js("document.querySelector('#doc').dispatchEvent(new CompositionEvent('compositionend', {bubbles:true, data:'你'}))")
+            await pump(for: 0.12)
+            #expect(h.doc.buffer.text == final)
+            try await checkFresh(h)
         }
 
         @Test("Marked text commits once through NSTextInputClient in every editable place")

@@ -34,6 +34,9 @@
       holder.replaceChildren(sanitize(holder.textContent));
       for (const el of holder.querySelectorAll('*')) {
         for (const name of reserved) el.removeAttribute(name);
+        // WebKit treats this CSS property as an editable region even without
+        // an HTML contenteditable attribute.
+        el.style?.removeProperty('-webkit-user-modify');
         if (el.matches('input')) el.setAttribute('disabled', '');
       }
     }
@@ -238,8 +241,9 @@
       if (event.type === 'undo') {
         message = {...event, v: version};
       } else {
-        const [start, end] = event.range || selection() || remembered || [0, 0];
-        message = {...event, v: version, start, end};
+        const {fixed, ...fields} = event;
+        const [start, end] = fixed?.range || event.range || selection() || remembered || [0, 0];
+        message = {...fields, v: fixed?.version ?? version, start, end};
       }
       inFlight = true;
       movedSinceInput = false;
@@ -251,12 +255,34 @@
     const last = pending.at(-1);
     // A target range is meaningful for deletes and replacement text. For
     // ordinary adjacent typing Swift uses the caret from the preceding reply.
-    if (last?.inputType === 'insertText' && event.inputType === 'insertText' && !last.composed && !event.composed) {
+    if (last?.inputType === 'insertText' && event.inputType === 'insertText' && !last.composed && !event.composed && !last.fixed && !event.fixed) {
       last.data += event.data;
     } else {
       pending.push(event);
     }
     sendNext();
+  }
+
+  // A focusable link or summary in read-only HTML can receive keydown with
+  // no live selection. Report its own uneditable source range to Swift. Never
+  // use a remembered caret from an unrelated editable paragraph in that case.
+  function protectedRange(e) {
+    const node = getSelection().focusNode;
+    const owner = [e.target, document.activeElement, node?.nodeType === 1 ? node : node?.parentElement].map(el =>
+      el?.closest?.('[contenteditable="false"]')).find(el => el && root.contains(el));
+    if (!owner) return null;
+    const block = blockOf(owner);
+    const range = block && owner.hasAttribute('data-src') ? local(owner).map(at => block._base + at) : [0, 0];
+    return {range, version};
+  }
+
+  function submit(e, event) {
+    const fixed = protectedRange(e);
+    if (fixed) {
+      event.fixed = fixed;
+      event.target = fixed.range;
+    }
+    enqueue(event);
   }
 
   document.addEventListener('selectionchange', () => {
@@ -270,8 +296,8 @@
 
   // Native input methods temporarily own the DOM. Preserve every top-level
   // block covered by their selection; a cancellation may span several blocks.
-  root.addEventListener('compositionstart', () => {
-    const range = selection() || remembered || [0, 0];
+  root.addEventListener('compositionstart', e => {
+    const range = protectedRange(e)?.range || selection() || remembered || [0, 0];
     const saved = blocks.slice(blockIndexAt(range[0]), blockIndexAt(range[1]) + 1)
       .map(block => [block, block.cloneNode(true)]);
     composing = {range, saved, deferred: []};
@@ -305,13 +331,16 @@
     const r = e.getTargetRanges()[0];
     const target = r && root.contains(r.startContainer) && root.contains(r.endContainer)
       ? [toSource(r.startContainer, r.startOffset), toSource(r.endContainer, r.endOffset)] : null;
-    enqueue(input(e.inputType, e.data, target));
+    // An ordinary key arriving before the previous edit/navigation lands has
+    // no target in the resulting DOM yet. Use its caret at dispatch time.
+    const stale = e.inputType === 'insertText' && (inFlight || pending.length);
+    submit(e, input(e.inputType, e.data, stale ? null : target));
   });
 
   for (const [name, type] of [['paste', 'insertFromPaste'], ['drop', 'insertFromDrop']]) {
     root.addEventListener(name, e => {
       e.preventDefault();
-      enqueue(input(type));
+      submit(e, input(type));
     });
   }
   root.addEventListener('dragover', e => e.preventDefault());
@@ -364,7 +393,10 @@
     const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
     if (format || (plain && (e.key === 'Backspace' || e.key === 'Enter'))) {
       e.preventDefault();
-      enqueue(input(format || (e.key === 'Backspace' ? 'deleteContentBackward' : e.shiftKey ? 'insertLineBreak' : 'insertParagraph')));
+      submit(e, input(format || (e.key === 'Backspace' ? 'deleteContentBackward' : e.shiftKey ? 'insertLineBreak' : 'insertParagraph')));
+    } else if (plain && (e.key === 'Delete' || [...e.key].length === 1) && protectedRange(e)) {
+      e.preventDefault();
+      submit(e, e.key === 'Delete' ? input('deleteContentForward') : input('insertText', e.key));
     }
   });
 
@@ -417,7 +449,7 @@
   }
 
   document.addEventListener('click', e => {
-    const link = e.target.closest && e.target.closest('a[href]');
+    const link = e.target.closest && e.target.closest('a[href], area[href]');
     if (!link) return;
     if (!e.metaKey) { e.preventDefault(); return; }
     const name = fragment(link);
@@ -430,6 +462,15 @@
   globalThis.marklight = {
     /// Shows a whole document. `list` is `[{html, base}]`.
     load(list, v, start, end) {
+      // A lost patch history invalidates every offset held by this page. A
+      // late ACK only releases the old request; it cannot send an old intent.
+      pending.length = 0;
+      if (composing) {
+        composing = null;
+        root.blur();
+      }
+      remembered = null;
+      movedSinceInput = true;
       const holder = document.createDocumentFragment();
       const made = list.map(b => holder.appendChild(makeBlock(b.html, b.base)));
       root.replaceChildren(holder);
