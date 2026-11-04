@@ -325,9 +325,10 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         return nil
     }
 
-    /// Only a real click goes anywhere. Meta refreshes and frames are just dropped.
+    /// Check the modifier here too: raw HTML can activate an image map or SVG link.
     private func route(_ action: WKNavigationAction) {
-        guard action.navigationType == .linkActivated, let url = action.request.url else { return }
+        guard action.navigationType == .linkActivated, action.modifierFlags.contains(.command),
+              let url = action.request.url else { return }
         switch url.scheme?.lowercased() {
         case "http", "https", "mailto":
             openExternal(url)
