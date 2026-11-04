@@ -1,7 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
-import MarklightCore
+@testable import MarklightCore
 import Testing
 @testable import MarklightApp
 
@@ -168,6 +168,32 @@ extension PreviewSuites {
             try await h.settle()
             let back = try await h.js("return document.querySelectorAll('h1').length") as? Int
             #expect(back == 1)
+        }
+
+        @Test("An idle parse disagreement repairs the page from the same buffer version")
+        func idleRepair() async throws {
+            let h = try PreviewHarness(text: "one\n\ntwo")
+            defer { h.close() }
+            try await h.settle()
+            let doc = IncrementalDocument(units: h.doc.buffer.units)
+            let edit = try #require(BlockSerializer.edit(doc, inputType: "insertText", data: "x", selection: 1..<1, target: nil, pending: nil))
+            try #require(!edit.document.usedFullParse)
+            // Inject a wrong cached tree while keeping the exact verified source.
+            edit.document.block(at: 0).isOpaque = true
+            var loads = 0
+            let present = h.pane.updater.present
+            h.pane.updater.present = { update, done in
+                if case .load = update.content { loads += 1 }
+                present(update, done)
+            }
+            try h.doc.buffer.apply(edit.patch)
+            h.pane.updater.accepted(edit)
+            try await h.settle()
+            let version = h.doc.buffer.version
+            try #require(await pump(until: { loads == 1 }, timeout: 4))
+            try await h.settle()
+            #expect(h.doc.buffer.version == version)
+            #expect(try await h.js("return document.querySelector('#doc p [data-run]').textContent") as? String == "oxne")
         }
 
         @Test("A burst of edits is one update")
