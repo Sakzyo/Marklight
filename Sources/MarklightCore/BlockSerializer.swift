@@ -64,7 +64,10 @@ public enum BlockSerializer {
             else if lo > 0, leaf.atoms[lo - 1].range.upperBound == start { marks = leaf.atoms[lo - 1].marks }
             else if lo < leaf.atoms.count, leaf.atoms[lo].range.lowerBound == start { marks = leaf.atoms[lo].marks }
             else { marks = [] }
-            let editor = LeafEdit(doc: doc, topIndex: index, top: top, leaf: leaf, span: span)
+            let hint = deletion && range.isEmpty
+                ? leaf.atoms[cut.lowerBound].range.lowerBound..<leaf.atoms[cut.upperBound - 1].range.upperBound
+                : range
+            let editor = LeafEdit(doc: doc, topIndex: index, top: top, leaf: leaf, span: span, editRange: hint)
             if let result = editor.replacing(cut, with: insertion, marks: marks) { return result }
             // After **When:** a letter cannot follow the closing delimiter. It
             // can still be typed by extending the adjacent formatting.
@@ -74,7 +77,7 @@ public enum BlockSerializer {
             return nil
         }
         guard !deletion, range.isEmpty, range == selection, target == nil || target == selection, start == pending || (start == 0 && doc.units.isEmpty) else { return nil }
-        return LeafEdit(doc: doc, topIndex: nil, top: nil, leaf: nil, span: range).replacing(0..<0, with: insertion, marks: [])
+        return LeafEdit(doc: doc, topIndex: nil, top: nil, leaf: nil, span: range, editRange: range).replacing(0..<0, with: insertion, marks: [])
     }
 
     private static func editable(_ b: Block, range: Range<Int>, units: [UInt16]) -> Block? {
@@ -131,6 +134,7 @@ private struct LeafEdit {
     let top: Block?
     let leaf: Block?
     let span: Range<Int>
+    let editRange: Range<Int>
 
     func replacing(_ cut: Range<Int>, with text: [UInt16], marks: [Mark]) -> RenderedEdit? {
         var expected = leaf?.atoms ?? []
@@ -150,8 +154,7 @@ private struct LeafEdit {
             expected[i].marks = kept
         }
         let original = leaf?.atoms ?? []
-        let adjacent = max(0, cut.lowerBound - 1)..<min(original.count, cut.upperBound + 1)
-        let affected = Set(original[adjacent].flatMap(\.marks) + marks)
+        let affected = Set(original[cut].flatMap(\.marks) + marks)
         var attempts: [Spelling] = [.raw, .inline, .block, .widerCode, .alternateMarks]
         // The new punctuation may pair with an existing literal (notably a
         // backtick). Retry one original character at a time, nearest first.
@@ -170,14 +173,30 @@ private struct LeafEdit {
                !doc.units[span.lowerBound - 1].isSpaceOrTab { written.insert(32, at: 0) }
             if previous == written { continue }
             previous = written
-            let diff = Patch.minimal(from: Array(doc.units[span]), to: written, origin: .rendered)
-            let at = span.lowerBound
-            let patch = Patch(range: (at + diff.range.lowerBound)..<(at + diff.range.upperBound), replacement: diff.replacement, origin: .rendered)
+            let patch = minimalPatch(for: written)
             let candidate = doc.applying(patch)
             guard let location = verified(candidate, patch: patch, expected: expected, caretIndex: caretIndex) else { continue }
             return RenderedEdit(patch: patch, document: candidate, caret: location.caret, pending: location.pending)
         }
         return nil
+    }
+
+    /// Equal adjacent units make a prefix/suffix diff ambiguous. Prefer the
+    /// actual key's range when it yields exactly the verified spelling, so
+    /// undo and concurrent caret transforms see the change where it happened.
+    private func minimalPatch(for written: [UInt16]) -> Patch {
+        let prefix = editRange.lowerBound - span.lowerBound, suffix = span.upperBound - editRange.upperBound
+        var range = span, replacement = written[...]
+        if prefix + suffix <= written.count,
+           written.prefix(prefix).elementsEqual(doc.units[span.lowerBound..<editRange.lowerBound]),
+           written.suffix(suffix).elementsEqual(doc.units[editRange.upperBound..<span.upperBound]) {
+            range = editRange
+            replacement = written[prefix..<(written.count - suffix)]
+        }
+        let diff = Patch.minimal(from: Array(doc.units[range]), to: Array(replacement), origin: .rendered)
+        let base = range.lowerBound
+        return Patch(range: (base + diff.range.lowerBound)..<(base + diff.range.upperBound),
+                     replacement: diff.replacement, origin: .rendered)
     }
 
     private enum Spelling: Equatable { case raw, inline, block, widerCode, alternateMarks, escapeOne(Int) }

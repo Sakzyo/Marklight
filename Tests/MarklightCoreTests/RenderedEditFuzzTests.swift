@@ -15,7 +15,7 @@ struct RenderedEditFuzzTests {
     @Test func seededEdits() throws {
         let ops = ["letter", "literal", "backspace", "forward", "replace", "word", "line"]
         var applied = Array(repeating: 0, count: ops.count)
-        var refused = applied
+        var refused = applied, atBoundary = applied, emptyTarget = applied
         let steps = ProcessInfo.processInfo.environment["MARKLIGHT_LARGE_FUZZ"] == "1" ? 160 : 10
         for name in Fixtures.all {
             let original = try Fixtures.data(name)
@@ -58,6 +58,8 @@ struct RenderedEditFuzzTests {
                 let context = "\(name), seed \(seed), step \(step) \(type) \(selected)"
                 guard let edit = BlockSerializer.edit(doc, inputType: type, data: data, selection: selected, target: target, pending: pending) else {
                     refused[op] += 1
+                    if target?.isEmpty == true { emptyTarget[op] += 1 }
+                    else if at == positions.first || at == positions.last { atBoundary[op] += 1 }
                     try checkAgainstFullParse(doc, expected: buffer.units, context: context)
                     continue
                 }
@@ -92,7 +94,7 @@ struct RenderedEditFuzzTests {
             #expect(!buffer.isDirty && buffer.serialized() == original, "\(name), seed \(seed)")
         }
         for i in ops.indices {
-            print("Rendered fuzz \(ops[i]): \(applied[i]) applied, \(refused[i]) refused")
+            print("Rendered fuzz \(ops[i]): \(applied[i]) applied, \(refused[i]) refused (\(emptyTarget[i]) empty target, \(atBoundary[i]) leaf edge)")
             #expect(applied[i] > 0, "\(ops[i]) never applied")
         }
     }

@@ -53,6 +53,21 @@ struct RenderedEditTests {
         }
     }
 
+    @Test func repeatedUnitsArePatchedAtTheCaret() throws {
+        let doc = IncrementalDocument(units: Array("aaaa".utf16))
+        let insert = try #require(BlockSerializer.edit(doc, inputType: "insertText", data: "a", selection: 1..<1, target: nil, pending: nil))
+        #expect(insert.patch == Patch(range: 1..<1, replacement: [97], origin: .rendered))
+        let delete = try #require(BlockSerializer.edit(doc, inputType: "deleteContentBackward", data: nil, selection: 2..<2, target: nil, pending: nil))
+        #expect(delete.patch == Patch(range: 1..<2, replacement: [], origin: .rendered))
+    }
+
+    @Test func unchangedSyntaxSurvivesAnEscapeRetry() throws {
+        let (text, selection) = marked("a [foo] * b ` c‸ after & __bold__")
+        let doc = IncrementalDocument(units: Array(text.utf16))
+        let edit = try #require(BlockSerializer.edit(doc, inputType: "insertText", data: "`", selection: selection, target: nil, pending: nil))
+        #expect(edit.document.units == Array("a [foo] * b \\` c\\` after & __bold__".utf16))
+    }
+
     @Test func targetValidation() throws {
         let doc = IncrementalDocument(units: Array("abcd\n\n<div>raw</div>\n".utf16))
         let accepted = try #require(BlockSerializer.edit(doc, inputType: "insertText", data: "x", selection: 3..<3, target: 1..<1, pending: nil))
