@@ -305,6 +305,41 @@ struct HTMLRendererTests {
         #expect(!render(text).hasRemoteImages, "\(text)")
     }
 
+    @Test("A local render agrees with a fresh render, including images and shifted offsets")
+    func incrementalRender() throws {
+        let text = "![image](https://example.com/a.png)\n\nfirst\n\nsecond **bold**\n\nthird\n\nlast"
+        let doc = IncrementalDocument(units: Array(text.utf16))
+        let old = HTMLRenderer.render(doc, pending: nil)
+        let at = (text as NSString).range(of: "bold").location + 2
+        let patch = Patch(range: at..<at, replacement: Array("字🦉".utf16), origin: .rendered)
+        let next = doc.applying(patch)
+        #expect(!next.usedFullParse)
+        let local = HTMLRenderer.render(next, pending: nil, reusing: old, patch: patch)
+        let fresh = HTMLRenderer.render(ParsedDocument(units: next.units))
+        #expect(local == fresh)
+        #expect(local.hasRemoteImages)
+        #expect(old.patch(to: local).list.count == 1)
+    }
+
+    @Test("A pending paragraph has a real caret without adding source bytes")
+    func pendingParagraph() {
+        let doc = IncrementalDocument(units: Array("before\n\n\n\nafter".utf16))
+        let out = HTMLRenderer.render(doc, pending: 8)
+        #expect(out.blocks.count == 3)
+        #expect(out.blocks[1].base == 8)
+        #expect(out.blocks[1].html.contains(#"data-caret="0"><br data-src="0:0">"#))
+        #expect(out.length == doc.units.count)
+        for text in ["- ", "> ", "# "] {
+            #expect(html(text).contains(#"><br data-src="#), "empty leaf in \(text)")
+        }
+    }
+
+    @Test("Changing the order of combining marks reaches the DOM")
+    func exactUnits() {
+        let a = render("a\u{0315}\u{0300}"), b = render("a\u{0300}\u{0315}")
+        #expect(a.patch(to: b).list.count == 1)
+    }
+
     // MARK: - Block patches
 
     private func apply(_ patch: BlockPatch, to old: RenderedDocument) -> [RenderedBlock] {

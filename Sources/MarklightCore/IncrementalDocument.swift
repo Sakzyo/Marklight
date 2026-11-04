@@ -11,6 +11,7 @@ public struct IncrementalDocument {
 
     public let units: [UInt16]
     public let usedFullParse: Bool
+    let changedBlock: Int?
     private var entries: [Entry]
     private let globalContext: Bool
     public var blockCount: Int { entries.count }
@@ -20,16 +21,18 @@ public struct IncrementalDocument {
         self.units = units
         entries = parsed.root.children.map { Entry(tree: $0, offset: 0) }
         usedFullParse = true
+        changedBlock = nil
         // cmark resolves definitions globally and caps their total expansion by
         // document size. A previously unclosed YAML fence can close far below.
         globalContext = Self.mayDefineReference(units[...]) ||
             (units.starts(with: [45, 45, 45]) && parsed.root.children.first?.kind != .frontMatter)
     }
 
-    private init(units: [UInt16], entries: [Entry]) {
+    private init(units: [UInt16], entries: [Entry], edited: Int) {
         self.units = units
         self.entries = entries
         usedFullParse = false
+        changedBlock = edited
         globalContext = false
     }
 
@@ -91,7 +94,7 @@ public struct IncrementalDocument {
         if delta != 0 {
             for index in result.indices where index > edited { result[index].offset += delta }
         }
-        return Self(units: next, entries: result)
+        return Self(units: next, entries: result, edited: edited)
     }
 
     /// Find the first top-level block ending at or beyond the caret.

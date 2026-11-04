@@ -4,7 +4,12 @@ import Foundation
 /// block's HTML doesn't change when text above it does (`docs/contracts.md`).
 public struct RenderedBlock: Equatable, Sendable {
     public let html: String
-    public let base: Int
+    public fileprivate(set) var base: Int
+    fileprivate var hasRemoteImage = false
+
+    public static func == (a: Self, b: Self) -> Bool {
+        a.base == b.base && a.html.utf8.elementsEqual(b.html.utf8)
+    }
 
     public init(html: String, base: Int) {
         self.html = html
@@ -47,7 +52,7 @@ public struct RenderedDocument: Equatable, Sendable {
         var tail = 0
         while tail < old.count - head, tail < next.count - head {
             let a = old[old.count - 1 - tail], b = next[next.count - 1 - tail]
-            guard a.base + delta == b.base, a.html == b.html else { break }
+            guard a.base + delta == b.base, a.html.utf8.elementsEqual(b.html.utf8) else { break }
             tail += 1
         }
         return BlockPatch(from: head, remove: old.count - head - tail, list: Array(next[head..<(next.count - tail)]), delta: delta)
@@ -64,16 +69,45 @@ public struct RenderedDocument: Equatable, Sendable {
 /// doesn't escape attributes and it drops image `alt` text (Spike 6).
 public enum HTMLRenderer {
     public static func render(_ doc: ParsedDocument) -> RenderedDocument {
-        var blocks: [RenderedBlock] = []
-        blocks.reserveCapacity(doc.root.children.count)
-        var hasRemoteImages = false
-        for child in doc.root.children {
-            var writer = BlockWriter(units: doc.units, base: child.range.lowerBound)
-            writer.block(child)
-            blocks.append(RenderedBlock(html: writer.out, base: child.range.lowerBound))
-            hasRemoteImages = hasRemoteImages || writer.foundRemoteImage
+        let blocks = doc.root.children.map { render($0, units: doc.units) }
+        return document(blocks, length: doc.units.count)
+    }
+
+    /// The worker may reuse the render of the snapshot immediately preceding
+    /// `patch`. A successful local parse changed one top-level block.
+    public static func render(_ doc: IncrementalDocument, pending: Int?, reusing previous: RenderedDocument? = nil,
+                              patch: Patch? = nil) -> RenderedDocument {
+        let caret = pending ?? (doc.units.isEmpty ? 0 : nil)
+        var blocks: [RenderedBlock]
+        if let index = doc.changedBlock, caret == nil, let previous, let patch, previous.blocks.count == doc.blockCount,
+           previous.length + patch.replacement.count - patch.range.count == doc.units.count {
+            blocks = previous.blocks
+            blocks[index] = render(doc.block(at: index), units: doc.units)
+            let delta = doc.units.count - previous.length
+            if delta != 0 {
+                for i in (index + 1)..<blocks.count { blocks[i].base += delta }
+            }
+        } else {
+            blocks = (0..<doc.blockCount).map { render(doc.block(at: $0), units: doc.units) }
         }
-        return RenderedDocument(blocks: blocks, length: doc.units.count, hasRemoteImages: hasRemoteImages)
+        if let caret, doc.containing(caret) == nil {
+            let index = blocks.firstIndex { $0.base >= caret } ?? blocks.endIndex
+            let placeholder = #"<p data-src="0:0" data-caret="0"><br data-src="0:0"></p>"#
+            blocks.insert(RenderedBlock(html: placeholder, base: caret), at: index)
+        }
+        return document(blocks, length: doc.units.count)
+    }
+
+    private static func render(_ block: Block, units: [UInt16]) -> RenderedBlock {
+        var writer = BlockWriter(units: units, base: block.range.lowerBound)
+        writer.block(block)
+        var result = RenderedBlock(html: writer.out, base: block.range.lowerBound)
+        result.hasRemoteImage = writer.foundRemoteImage
+        return result
+    }
+
+    private static func document(_ blocks: [RenderedBlock], length: Int) -> RenderedDocument {
+        RenderedDocument(blocks: blocks, length: length, hasRemoteImages: blocks.contains(where: \.hasRemoteImage))
     }
 }
 
@@ -146,7 +180,7 @@ private struct BlockWriter {
             leaf(b, tag: "h\(level)")
         case .quote:
             out += "<blockquote \(src(b.range))>"
-            children(of: b)
+            if b.children.isEmpty { emptyParagraph(in: b) } else { children(of: b) }
             out += "</blockquote>"
         case .list(let ordered, let start):
             if ordered {
@@ -181,12 +215,14 @@ private struct BlockWriter {
         if let checked {
             out += "<input type=\"checkbox\" disabled \(src(b.range))\(checked ? " checked" : "")>"
         }
-        if b.children.isEmpty {
-            let end = units.lineEnd(from: b.range.lowerBound)
-            out += "<p \(src(end..<end)) \(caret(end))></p>"
-        }
+        if b.children.isEmpty { emptyParagraph(in: b) }
         children(of: b)
         out += "</li>"
+    }
+
+    private mutating func emptyParagraph(in block: Block) {
+        let end = units.lineEnd(from: block.range.lowerBound)
+        out += "<p \(src(end..<end)) \(caret(end))><br \(src(end..<end))></p>"
     }
 
     private mutating func code(_ b: Block, info: String) {
@@ -244,7 +280,8 @@ private struct BlockWriter {
             return
         }
         guard !b.atoms.isEmpty else {
-            out += "<\(tag) \(src(b.range))\(attributes) \(caret(b.content.lowerBound))></\(tag)>"
+            let placeholder = b.kind == .cell ? "" : "<br \(src(b.content))>"
+            out += "<\(tag) \(src(b.range))\(attributes) \(caret(b.content.lowerBound))>\(placeholder)</\(tag)>"
             return
         }
         out += "<\(tag) \(src(b.range))\(attributes)>"
