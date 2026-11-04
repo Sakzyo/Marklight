@@ -58,6 +58,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
                                                                    queue: nil) { [weak self] _ in self?.sourceSelectionChanged() }
         lastSelection = editor.textView.selectedRange()
         lastSelectionVersion = buffer.version
+        editor.historyMoved = { [weak self] selection in
+            guard let self, self.layout == .split else { return }
+            self.preview?.reveal(selection.lowerBound)
+        }
     }
 
     @available(*, unavailable)

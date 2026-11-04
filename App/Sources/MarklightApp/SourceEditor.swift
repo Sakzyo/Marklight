@@ -13,6 +13,8 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
     /// A composition is in the text view but not the buffer until it's committed.
     private(set) var isComposing = false
     private var observer: UUID?
+    /// Undo or redo moved the caret, to show what changed.
+    var historyMoved: ((Range<Int>) -> Void)?
 
     init(buffer: Buffer) {
         self.buffer = buffer
@@ -123,6 +125,7 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         let range = NSRange(result.selection)
         textView.setSelectedRange(range)
         textView.scrollRangeToVisible(range)
+        historyMoved?(result.selection)
     }
 }
 
