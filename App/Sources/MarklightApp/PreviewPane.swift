@@ -272,8 +272,9 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
         let target = input.target.flatMap { updater.current($0, at: input.targetVersion, inputType: input.type) }
         guard input.target == nil || target != nil else { return refuse() }
         let generation = self.generation
+        let pageVersion = input.target?.isEmpty == true ? min(input.version, input.targetVersion) : input.version
         updater.verify(inputType: input.type, data: input.data, selection: selection,
-                       target: target) { [weak self] version, edit in
+                       target: target, since: pageVersion) { [weak self] version, edit in
             guard let self, self.generation == generation else { return }
             // A source key may have arrived during verification. Rebase the
             // intent and verify that candidate against the buffer now on screen.

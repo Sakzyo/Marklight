@@ -101,15 +101,40 @@ final class PreviewUpdater {
         return carried
     }
 
+    /// Check the actual grapheme that a stale Backspace/Delete would remove.
+    /// An insertion inside a combining sequence can change that grapheme
+    /// without touching the caret itself. Walk its span back to the page.
+    private func unchanged(_ range: Range<Int>, since version: Int) -> Bool {
+        guard version != buffer.version else { return true }
+        guard let first = changes.firstIndex(where: { $0.version == version + 1 }) else { return false }
+        var span = range
+        for change in changes[first...].reversed() {
+            let patch = change.patch, start = patch.range.lowerBound
+            let end = start + patch.replacement.count
+            if patch.range.isEmpty && patch.replacement.isEmpty { continue }
+            // An edit touching the edge can join or split the original cluster.
+            if span.upperBound < start { continue }
+            guard span.lowerBound > end else { return false }
+            let shift = patch.range.count - patch.replacement.count
+            span = (span.lowerBound + shift)..<(span.upperBound + shift)
+        }
+        return true
+    }
+
     /// Verify on a snapshot. The caller checks the version before committing.
-    func verify(inputType: String, data: String?, selection: Range<Int>, target: Range<Int>?,
+    func verify(inputType: String, data: String?, selection: Range<Int>, target: Range<Int>?, since pageVersion: Int,
                 completion: @escaping (Int, RenderedEdit?) -> Void) {
         let version = buffer.version, units = buffer.units, pending = self.pending
         let cached = parsed?.version == version ? parsed?.document : nil
         queue.async {
             let doc = cached ?? IncrementalDocument(units: units)
             let edit = BlockSerializer.edit(doc, inputType: inputType, data: data, selection: selection, target: target, pending: pending)
-            DispatchQueue.main.async { completion(version, edit) }
+            DispatchQueue.main.async { [weak self] in
+                if let self, self.buffer.version == version, let edit, selection.isEmpty,
+                   target?.isEmpty != false, inputType.hasPrefix("delete"), !self.unchanged(edit.patch.range, since: pageVersion) {
+                    completion(version, nil)
+                } else { completion(version, edit) }
+            }
         }
     }
 

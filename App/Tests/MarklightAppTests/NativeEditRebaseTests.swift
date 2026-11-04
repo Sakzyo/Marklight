@@ -46,6 +46,23 @@ struct NativeEditRebaseTests {
         }
     }
 
+    @Test("A stale collapsed delete cannot take new text from inside the original grapheme")
+    func changedGrapheme() async throws {
+        for (kind, position) in [("deleteContentBackward", 2), ("deleteContentForward", 0)] {
+            let buffer = Buffer(contentsOf: Data("a\u{301}b".utf8)), updater = PreviewUpdater(buffer: buffer)
+            let version = buffer.version
+            try buffer.apply(Patch(range: 1..<1, replacement: [88], origin: .source))
+            let selection = try #require(updater.current(position..<position, at: version, inputType: kind))
+            let edit = await withCheckedContinuation { reply in
+                updater.verify(inputType: kind, data: nil, selection: selection, target: nil, since: version) { _, edit in
+                    reply.resume(returning: edit)
+                }
+            }
+            #expect(edit == nil)
+            #expect(buffer.text == "aX\u{301}b")
+        }
+    }
+
     @Test("A source composition preserves rendered edits inside or at either end of its original marked range")
     func sourceComposition() throws {
         _ = NSApplication.shared
