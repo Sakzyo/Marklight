@@ -15,7 +15,7 @@ Date: 2026-11-04. macOS 26.5.2, Swift 6.3.3, release build. Throwaway code. This
 | Spike 3 regression cases | **201 of 201** |
 | Spike 4 stability checks | **39 of 39** |
 | Undo and redo for all 174 scenarios, engine level | Pass: exact bytes both ways |
-| Undo-all and redo-all after random fuzz edits | **0 violations, 0 crashes** in 45,534 edits, across 5 seeds |
+| Undo-all and redo-all after random fuzz edits | **0 violations, 0 crashes** in 46,534 edits, across 5 seeds |
 | Undo grouping unit tests | Pass |
 | Mixed session: 120 edits across both panes, undone then redone by key | Exact bytes both ways |
 
