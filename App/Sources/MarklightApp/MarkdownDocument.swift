@@ -51,6 +51,9 @@ public final class MarkdownDocument: NSDocument {
             watcher = fileURL.map { url in
                 FileWatcher(url: url) { [weak self] in self?.checkForExternalChange() }
             }
+            for controller in windowControllers {
+                (controller as? EditorWindowController)?.documentMoved(to: fileURL)
+            }
         }
     }
 

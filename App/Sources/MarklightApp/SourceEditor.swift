@@ -13,6 +13,8 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
     /// A composition is in the text view but not the buffer until it's committed.
     private(set) var isComposing = false
     private var observer: UUID?
+    /// Undo or redo moved the caret, to show what changed.
+    var historyMoved: ((Range<Int>) -> Void)?
 
     init(buffer: Buffer) {
         self.buffer = buffer
@@ -24,6 +26,7 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         textView.editor = self
         textView.textStorage?.delegate = self
         syncStorage()
+        textView.setSelectedRange(NSRange(location: 0, length: 0)) // setting the text leaves the caret at the end
         observer = buffer.addObserver { [weak self] patch in
             guard let self else { return }
             if patch.origin != .source { apply(patch) }
@@ -123,6 +126,7 @@ final class SourceEditor: NSObject, NSTextStorageDelegate {
         let range = NSRange(result.selection)
         textView.setSelectedRange(range)
         textView.scrollRangeToVisible(range)
+        historyMoved?(result.selection)
     }
 }
 

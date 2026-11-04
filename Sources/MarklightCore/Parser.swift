@@ -64,6 +64,10 @@ public final class Block {
         case table, row(header: Bool), cell
     }
 
+    public enum Alignment: Sendable {
+        case left, center, right
+    }
+
     public let kind: Kind
     public internal(set) var range: Range<Int>
     public internal(set) var children: [Block] = []
@@ -76,6 +80,10 @@ public final class Block {
     public internal(set) var content: Range<Int> = 0..<0
     /// Its text couldn't be mapped to the source, so it can only be edited as source.
     public internal(set) var isOpaque = false
+    /// For HTML blocks: the HTML, without any quote or list prefixes.
+    public internal(set) var rawHTML = ""
+    /// For tables: each column's alignment, where the delimiter row sets one.
+    public internal(set) var columnAlignments: [Alignment?] = []
 
     init(kind: Kind, range: Range<Int>) {
         self.kind = kind
@@ -239,11 +247,22 @@ public final class ParsedDocument {
         case let n as OrderedList: block = Block(kind: .list(ordered: true, start: Int(n.startIndex)), range: r)
         case let n as ListItem: block = Block(kind: .item(checked: n.checkbox.map { $0 == .checked }), range: r)
         case let n as CodeBlock: block = Block(kind: .code(info: n.language ?? ""), range: r)
-        case is HTMLBlock: block = Block(kind: .html, range: r)
+        case let n as HTMLBlock:
+            block = Block(kind: .html, range: r)
+            block.rawHTML = n.rawHTML
         case is ThematicBreak:
             // cmark's range takes in the line break.
             block = Block(kind: .rule, range: r.lowerBound..<units.lineEnd(from: r.lowerBound))
-        case is Table: block = Block(kind: .table, range: r)
+        case let n as Table:
+            block = Block(kind: .table, range: r)
+            block.columnAlignments = n.columnAlignments.map { alignment in
+                switch alignment {
+                case .left: return .left
+                case .center: return .center
+                case .right: return .right
+                case nil: return nil
+                }
+            }
         case is Table.Head: block = Block(kind: .row(header: true), range: r)
         case is Table.Row: block = Block(kind: .row(header: false), range: r)
         case is Table.Cell: block = Block(kind: .cell, range: r)

@@ -14,16 +14,21 @@ swift-markdown bundles swift-cmark (cmark-gfm), which is licensed under the
 BSD 2-Clause License and others; see that package's COPYING file.
 
 ================================================================================
-DOMPurify 3.4.17 (used by spikes/spike6-security; will be bundled in Resources/web)
+DOMPurify 3.4.17, bundled in Resources/web/purify.min.js
 https://github.com/cure53/DOMPurify
 License: Apache License 2.0 OR Mozilla Public License 2.0 (dual-licensed)
 
 Copyright (c) Cure53 and other contributors. Full license text:
-spikes/spike6-security/Sources/spike6-security/Resources/DOMPurify-LICENSE
+Resources/web/DOMPurify-LICENSE, copied into the app at
+Contents/Resources/web/DOMPurify-LICENSE.
+
+Taken from the npm tarball dompurify-3.4.17.tgz, checked against the registry's
+integrity value:
+  sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==
 
 ================================================================================
-To add before the preview ships (bundled offline JS, each with its own license):
-  - Mermaid
-  - KaTeX
-  - highlight.js
+To add when they are bundled (bundled offline JS, each with its own license):
+  - highlight.js (M5)
+  - Mermaid (M6)
+  - KaTeX (M6)
 And Sparkle, when updates are added.

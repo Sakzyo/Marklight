@@ -60,8 +60,32 @@ All approved by the owner on 2026-11-04.
 - Minimum macOS stays 14: it's still within Apple's usual support window alongside macOS 15 and 26.
 - Autosave is a setting, off by default, because silent in-place saves interact with git and file watchers (`docs/plan.md` 2.7). Coordinator can change this.
 
+## Approved for M2
+
+Approved by the owner on 2026-11-04, from the M2 plan.
+
+- Bridge additions for selection sync: the `selection` message and `marklight.reveal(offset)`. In `docs/bridge.md`.
+- M2 uses a subset of the bridge: `ready`, `selection`, `marklight.load`, `marklight.patch`, and `marklight.reveal`.
+- First-launch layout is split, with Cmd-1, Cmd-2, and Cmd-3 for source, preview, and split. The choice is remembered for the whole app.
+- highlight.js stays out of M2, because it would rewrite the code DOM that carries `data-run` offsets. Code block color can come with M5.
+- Inline HTML stays a literal chip, as in Spike 3. Only HTML blocks go through the sanitizer.
+- "Load remote images" allows `https:` only, and reloads the page with a wider CSP.
+- Heading anchors are resolved in JS when a link is clicked. A stored `id` would depend on duplicate headings above it, so a block's HTML would change with the text above it.
+- The buffer stays on the main thread in M2. Only parsing, rendering, and diffing move off it.
+
+## Found while building M2
+
+These came up during M2, and the owner hasn't reviewed them yet.
+
+- Only a caret move on its own scrolls the preview. An edit carries the caret along, and if that scrolled the preview, scroll anchoring would be undone by the next keystroke. Undo and redo do scroll, to show what changed.
+- Raw HTML travels as escaped text inside the `data-raw` element, and JS sanitizes it and expands it there. Sent as markup, a stray `</div>` could close the holder and put forged offsets outside it. The meaning in `docs/bridge.md` still holds, but what's on the wire differs from the spikes.
+- The renderer leaves out `contenteditable` and the empty-leaf `<br>` until M3 needs them, and task checkboxes are `disabled` until M4. Empty leaves keep `data-caret`.
+- `thead` and `tbody` are written explicitly, each with `data-src`. Otherwise the HTML parser would add a `tbody` with none.
+
 ## Known gaps for milestones
 
+- M2: top-level blocks are sanitized one at a time, so `<details>` or `<div align="center">` wrapping Markdown doesn't wrap it, and the opening tag closes inside its own block.
+- M2: `<a name="x"></a>` on its own line is inline HTML in CommonMark, so it shows as a chip, and a link to it does nothing.
 - M3: every edit re-parses the whole file (Spikes 3 and 4). Incremental parsing is required for large files.
 - M3: editing must run off the main thread (Spike 4).
 - M5: nothing in the rendered pane gets out of a code block at the end of a document (Spike 5 manual test). Needs a design.
