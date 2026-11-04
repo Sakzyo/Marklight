@@ -36,7 +36,6 @@ final class PreviewUpdater {
 
     var present: (PreviewUpdate, @escaping (Bool) -> Void) -> Void = { _, done in done(true) }
     var caughtUp: () -> Void = {}
-    var presented: (Int) -> Void = { _ in }
 
     init(buffer: Buffer) {
         self.buffer = buffer
@@ -56,7 +55,7 @@ final class PreviewUpdater {
         parsed = nil
         if let p = pending { pending = patch.range.contains(p) ? nil : patch.transform(p) }
         localCaret = localCaret.map { patch.transform($0.lowerBound)..<patch.transform($0.upperBound) }
-        schedule(immediate: patch.origin == .rendered)
+        schedule() // accepted() supplies the verified snapshot after all buffer observers return
     }
 
     /// Validate against the text the page saw before transforming. In particular
@@ -155,14 +154,19 @@ final class PreviewUpdater {
 
     private func schedule(immediate: Bool = false) {
         guard canUpdate else { return }
-        if scheduled != nil && !immediate { return }
-        scheduled?.cancel()
+        if immediate {
+            scheduled?.cancel()
+            scheduled = nil
+            update()
+            return
+        }
+        guard scheduled == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             self?.scheduled = nil
             self?.update()
         }
         scheduled = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + (immediate ? 0 : Self.delay), execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.delay, execute: work)
     }
 
     private func update() {
@@ -178,11 +182,17 @@ final class PreviewUpdater {
         needsLoad = false
         queue.async { [weak self] in
             let doc = cached ?? IncrementalDocument(units: units)
-            let single = !load && cached != nil && history.count == 1 ? history[0] : nil
-            let new = HTMLRenderer.render(doc, pending: pending, reusing: old, patch: single)
+            let new: RenderedDocument
             let content: PreviewUpdate.Content
-            if !load, let old { content = .patch(old.patch(to: new)) }
-            else { content = .load(new.blocks) }
+            if !load, let old, cached != nil, history.count == 1 {
+                let update = HTMLRenderer.update(old, to: doc, after: history[0], pending: pending)
+                new = update.document
+                content = .patch(update.patch)
+            } else {
+                new = HTMLRenderer.render(doc, pending: pending)
+                if !load, let old { content = .patch(old.patch(to: new)) }
+                else { content = .load(new.blocks) }
+            }
             let update = PreviewUpdate(content: content, version: version, hasRemoteImages: new.hasRemoteImages,
                                        caret: caret, edits: history.map { [$0.range.lowerBound, $0.range.upperBound, $0.replacement.count] })
             DispatchQueue.main.async {
@@ -195,7 +205,6 @@ final class PreviewUpdater {
                         if success {
                             self.shown = new
                             self.shownVersion = version
-                            self.presented(version)
                         } else { self.needsLoad = true }
                     }
                     self.finished()

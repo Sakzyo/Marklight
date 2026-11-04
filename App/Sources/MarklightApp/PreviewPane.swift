@@ -82,10 +82,6 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
             present(update, done: done)
         }
         updater.caughtUp = { [weak self] in self?.flushReveal() }
-        updater.presented = { [weak self] version in
-            guard let self, let waiting = waitingForVersion, version >= waiting else { return }
-            finishInput()
-        }
         webView.undoAction = { [weak self] in self?.menuHistory(redo: false) }
         webView.redoAction = { [weak self] in self?.menuHistory(redo: true) }
         webView.canUndo = { [weak self] in self.map { $0.inFlight || $0.buffer.canUndo } ?? false }
@@ -158,7 +154,18 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
                                "local": update.caret != nil, "edits": update.edits,
                                "caret": update.caret.map { [$0.lowerBound, $0.upperBound] } as Any? ?? NSNull()] as [String: Any]]
         }
-        webView.callAsyncJavaScript(code, arguments: arguments, in: nil, in: PreviewPane.world) { [weak self] result in
+        // WebKit may post the next queued key from done() before it returns
+        // this call's result. Admit that key but retry this ACK on load if the
+        // script failed before sending it and no subsequent input took over.
+        let ack = waitingForVersion.flatMap { $0 <= update.version ? $0 : nil }
+        let generation = self.generation
+        if ack != nil { inFlight = false }
+        let script = ack == nil ? code : code + "\nmarklight.done();"
+        webView.callAsyncJavaScript(script, arguments: arguments, in: nil, in: PreviewPane.world) { [weak self] result in
+            if let self, let ack, self.generation == generation, self.waitingForVersion == ack {
+                if case .failure = result { self.inFlight = true }
+                else { self.waitingForVersion = nil }
+            }
             if case .failure = result { return done(false) }
             if let y = self?.scrollToRestore, case .load = update.content {
                 self?.scrollToRestore = nil
@@ -197,11 +204,13 @@ final class PreviewPane: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptM
             if let current = updater.current(range, at: v) { selectionChanged?(current) }
         case "input":
             guard !inFlight, let input = Input(body) else { return reject(message) }
+            waitingForVersion = nil
             inFlight = true
             apply(input)
         case "undo" where body.count == 3:
             guard !inFlight, let v = Self.integer(body["v"]), v >= 0, v <= buffer.version,
                   let redo = Self.boolean(body["redo"]) else { return reject(message) }
+            waitingForVersion = nil
             inFlight = true
             guard let result = redo ? buffer.redo() : buffer.undo() else { return finishInput() }
             waitingForVersion = buffer.version
