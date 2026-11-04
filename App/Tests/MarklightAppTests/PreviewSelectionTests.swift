@@ -313,7 +313,7 @@ extension PreviewSuites {
             let start = h.webView.url
             let point = try await h.center(of: "a", text: link)
             await pump(for: 0.05)
-            await h.click(x: point.x, y: point.y)
+            await h.click(x: point.x, y: point.y, modifiers: .command)
             await pump(for: 0.2)
             let top = try await h.js("""
             return [...document.querySelectorAll('h1, h2')].filter(e => e.textContent === heading)[index].getBoundingClientRect().top;
@@ -330,7 +330,7 @@ extension PreviewSuites {
             try await h.settle()
             let point = try await h.center(of: "a", text: "to raw")
             await pump(for: 0.05)
-            await h.click(x: point.x, y: point.y)
+            await h.click(x: point.x, y: point.y, modifiers: .command)
             await pump(for: 0.2)
             let y = try await h.js("return scrollY") as? Double ?? 0
             #expect(y > 1000)
@@ -338,7 +338,7 @@ extension PreviewSuites {
             let missing = try await h.center(of: "a", text: "nowhere")
             await pump(for: 0.05)
             let before = try await h.js("return scrollY") as? Double
-            await h.click(x: missing.x, y: missing.y)
+            await h.click(x: missing.x, y: missing.y, modifiers: .command)
             await pump(for: 0.2)
             let after = try await h.js("return scrollY") as? Double
             #expect(before == after)

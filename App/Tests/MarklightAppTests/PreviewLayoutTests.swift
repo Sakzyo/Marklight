@@ -145,10 +145,10 @@ extension PreviewSuites {
             #expect(h.webView.validateUserInterfaceItem(menuItem(#selector(PreviewWebView.undo(_:)))))
             #expect(!h.webView.validateUserInterfaceItem(menuItem(#selector(PreviewWebView.redo(_:)))))
             h.webView.undo(nil)
-            #expect(h.doc.buffer.text == "text\n")
+            #expect(await pump(until: { h.doc.buffer.text == "text\n" }))
             #expect(h.textView.string == "text\n")
             h.webView.redo(nil)
-            #expect(h.doc.buffer.text == "text!\n")
+            #expect(await pump(until: { h.doc.buffer.text == "text!\n" }))
         }
 
         private func menuItem(_ action: Selector) -> NSMenuItem {

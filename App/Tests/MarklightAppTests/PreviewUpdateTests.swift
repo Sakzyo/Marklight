@@ -157,8 +157,13 @@ extension PreviewSuites {
             try await h.settle()
             try h.doc.buffer.apply(Patch(range: 0..<5, replacement: [], origin: .command))
             try await h.settle()
-            let none = try await h.js("return document.getElementById('doc').children.length") as? Int
-            #expect(none == 0)
+            let empty: [Int] = try await h.json("""
+            const root = document.querySelector('#doc');
+            return [root.childElementCount, root.textContent.length,
+                    root.querySelectorAll(':scope > div > p[data-src="0:0"][data-caret="0"] > br:only-child').length];
+            """)
+            #expect(empty == [1, 0, 1], "only the editable caret holder remains")
+            #expect(h.doc.buffer.units.isEmpty)
             try h.doc.buffer.apply(Patch(range: 0..<0, replacement: Array("# Back\n".utf16), origin: .command))
             try await h.settle()
             let back = try await h.js("return document.querySelectorAll('h1').length") as? Int

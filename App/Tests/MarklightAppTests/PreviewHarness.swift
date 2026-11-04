@@ -74,11 +74,11 @@ private let failOnEarlyExit: Void = {
     var window: NSWindow { controller.window! }
 
     init(url: URL, layout: PaneLayout = .split, size: NSSize = NSSize(width: 1000, height: 700),
-         defences: PreviewDefences = PreviewDefences()) throws {
+         defences: PreviewDefences = PreviewDefences(), windowClass: NSWindow.Type = NSWindow.self) throws {
         _ = NSApplication.shared
         _ = failOnEarlyExit
         doc = try MarkdownDocument(contentsOf: url, ofType: MarkdownDocument.markdownType)
-        controller = EditorWindowController(document: doc, layout: layout, defences: defences)
+        controller = EditorWindowController(document: doc, layout: layout, defences: defences, windowClass: windowClass)
         doc.addWindowController(controller)
         openHarnesses += 1
         controller.window!.alphaValue = 0
@@ -87,11 +87,12 @@ private let failOnEarlyExit: Void = {
         controller.setLayout(layout)
     }
 
-    convenience init(text: String, name: String = "doc.md", layout: PaneLayout = .split, size: NSSize = NSSize(width: 1000, height: 700)) throws {
+    convenience init(text: String, name: String = "doc.md", layout: PaneLayout = .split, size: NSSize = NSSize(width: 1000, height: 700),
+                     windowClass: NSWindow.Type = NSWindow.self) throws {
         let folder = try makeTemporaryFolder()
         let url = folder.appendingPathComponent(name)
         try Data(text.utf8).write(to: url)
-        try self.init(url: url, layout: layout, size: size)
+        try self.init(url: url, layout: layout, size: size, windowClass: windowClass)
     }
 
     func close() {
