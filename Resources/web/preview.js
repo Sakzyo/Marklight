@@ -19,9 +19,44 @@
 
   const local = el => el.dataset.src.split(':').map(Number);
 
+  // Blocks sit in plain wrappers, not directly under the root. WebKit's layout and
+  // paint each loop over an element's children, so a keystroke in a file with
+  // 15,000 blocks would otherwise spend more time there than on everything else.
+  // A wrapper adds no box of its own, so margins still collapse across it.
+  const chunkSize = 64;
+
+  function chunked(list) {
+    const holder = document.createDocumentFragment();
+    for (let i = 0; i < list.length; i += chunkSize) {
+      const chunk = document.createElement('div');
+      chunk.append(...list.slice(i, i + chunkSize));
+      holder.append(chunk);
+    }
+    return holder;
+  }
+
+  function insertBlock(el, before) {
+    (before?.parentNode || root.lastChild).insertBefore(el, before);
+  }
+
+  function removeBlock(el) {
+    const chunk = el.parentNode;
+    el.remove();
+    if (chunk?.parentNode === root && !chunk.hasChildNodes()) chunk.remove();
+  }
+
+  function blocksInPlace() {
+    let i = 0;
+    for (const chunk of root.childNodes) {
+      if (chunk.nodeType !== 1) return false;
+      for (const block of chunk.childNodes) if (block !== blocks[i++]) return false;
+    }
+    return i === blocks.length;
+  }
+
   function blockOf(node) {
     let el = node && node.nodeType === 1 ? node : node && node.parentElement;
-    while (el && el.parentElement !== root) el = el.parentElement;
+    while (el && el._base === undefined) el = el.parentElement;
     return el;
   }
 
@@ -141,8 +176,11 @@
   }
 
   function toSource(node, offset) {
-    if (node === root) {
-      if (offset < blocks.length) return blocks[offset]._base;
+    // Between blocks: the start of the next one, or else the end of the last.
+    if (node === root || node.parentNode === root) {
+      let next = node.childNodes[offset] || (node === root ? null : node.nextSibling);
+      if (next && next._base === undefined) next = next.firstChild;
+      if (next) return next._base;
       const last = blocks[blocks.length - 1];
       return last ? last._base + local(last.firstElementChild)[1] : 0;
     }
@@ -319,9 +357,7 @@
     composing = null;
     if (!session) return;
     // Restore the authoritative DOM even on commit. Swift can refuse a commit.
-    if (root.childNodes.length !== blocks.length || blocks.some((block, i) => root.childNodes[i] !== block)) {
-      root.replaceChildren(...blocks);
-    }
+    if (!blocksInPlace()) root.replaceChildren(chunked(blocks));
     for (const [block, saved] of session.saved) morph(block, saved);
     let range = session.range;
     for (const m of session.deferred) {
@@ -523,10 +559,8 @@
       }
       remembered = null;
       movedSinceInput = true;
-      const holder = document.createDocumentFragment();
-      const made = list.map(b => holder.appendChild(makeBlock(b.html, b.base)));
-      root.replaceChildren(holder);
-      blocks = made;
+      blocks = list.map(b => makeBlock(b.html, b.base));
+      root.replaceChildren(chunked(blocks));
       version = v;
       if (start != null && end != null) select(start, end);
     },
@@ -550,7 +584,7 @@
       const anchors = m.local ? [] : scrollAnchors();
       const s = getSelection();
       const selected = !composing && document.activeElement === root ? selection() : null;
-      const touched = selected && (live.includes(blockOf(s.anchorNode)) || live.includes(blockOf(s.focusNode)));
+      let touched = selected && (live.includes(blockOf(s.anchorNode)) || live.includes(blockOf(s.focusNode)));
       if (remembered) remembered = carry(remembered, m.edits);
       const after = blocks.slice(m.from + m.remove);
       const made = m.list.map(b => makeBlock(b.html, b.base));
@@ -561,10 +595,17 @@
         live[i]._base = made[i]._base;
         kept.push(live[i]);
       }
-      for (const el of live.slice(paired)) el.remove();
+      for (const el of live.slice(paired)) removeBlock(el);
       for (const el of made.slice(paired)) {
-        root.insertBefore(el, after[0] || null);
+        insertBlock(el, after[0]);
         kept.push(el);
+      }
+      // A large insertion lands in one wrapper. Spread it out, unless an input
+      // method owns part of the DOM. Moving a block loses any selection in it.
+      const grown = made[paired]?.parentNode;
+      if (grown?.childNodes.length > 2 * chunkSize && !composing) {
+        touched = selected;
+        grown.replaceWith(chunked([...grown.childNodes]));
       }
       if (m.delta) for (const el of after) el._base += m.delta;
       blocks = blocks.slice(0, m.from).concat(kept, after);

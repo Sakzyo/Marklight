@@ -8,6 +8,10 @@ import Testing
 /// normal run, as timings mean nothing in a debug build:
 ///
 ///     MARKLIGHT_TIMING=1 swift test --package-path App -c release -Xswiftc -enable-testing --filter PreviewTimingTests
+///
+/// This process never runs AppKit's event loop, so WebKit treats the page as
+/// hidden: it doesn't composite, and `requestAnimationFrame` never fires. That
+/// flatters rendered typing. `TypingBench` measures it on a visible page.
 private let timingEnabled = ProcessInfo.processInfo.environment["MARKLIGHT_TIMING"] != nil
 
 private let section = """
@@ -131,7 +135,10 @@ struct PreviewTimingTests {
             }
         };
         """, ["at": at, "delay": controlDelayMS])
-        await pump(for: 0.5)
+        // WebKit restyles the focused element's whole subtree once when the page's
+        // activation settles, about two seconds after focus here. It takes
+        // hundreds of ms at 850 KB, and it isn't a cost of typing.
+        await pump(for: 3)
         let letters = ["a", "s", "d", "f"]
         let stream = (0..<count).map { letters[($0 * 7 + $0 / 5) % letters.count] }
         var expected = Array(text.utf16)

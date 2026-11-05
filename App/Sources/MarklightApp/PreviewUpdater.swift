@@ -54,7 +54,10 @@ final class PreviewUpdater {
         let oldLength = buffer.units.count - patch.replacement.count + patch.range.count
         changes.append((buffer.version, patch, oldLength))
         if changes.count > 512 { changes.removeFirst() }
+        // Freeing a large document's tree between keys would be felt. Free it on the worker.
+        let stale = parsed
         parsed = nil
+        queue.async { withExtendedLifetime(stale) {} }
         if !movingHistory {
             if !buffer.canUndo && !buffer.canRedo { // reload discarded the buffer's history
                 pendingHistory = PendingCaretHistory()

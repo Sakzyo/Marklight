@@ -57,18 +57,15 @@ return n;
 /// Outside block `skip`: nodes that are new, nodes checked, and DOM changes seen.
 private let countChanges = """
 const root = document.getElementById('doc');
-const inSkipped = node => {
-  let el = node.nodeType === 1 ? node : node.parentElement;
-  while (el && el.parentElement !== root) el = el.parentElement;
-  return el === root.children[skip];
-};
+const blocks = [...root.children].flatMap(chunk => [...chunk.children]);
 let lost = 0, total = 0;
-[...root.children].forEach((block, i) => {
+blocks.forEach((block, i) => {
   if (i === skip) return;
   const walk = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
   while (walk.nextNode()) { total++; if (walk.currentNode._tag === undefined) lost++; }
 });
-const changes = window._changes.takeRecords().filter(r => r.target !== root && !inSkipped(r.target)).length;
+const structural = target => target === root || target.parentNode === root;
+const changes = window._changes.takeRecords().filter(r => !structural(r.target) && !blocks[skip]?.contains(r.target)).length;
 return [lost, total, changes];
 """
 
@@ -160,7 +157,7 @@ extension PreviewSuites {
             let empty: [Int] = try await h.json("""
             const root = document.querySelector('#doc');
             return [root.childElementCount, root.textContent.length,
-                    root.querySelectorAll(':scope > div > p[data-src="0:0"][data-caret="0"] > br:only-child').length];
+                    root.querySelectorAll(':scope > div > div > p[data-src="0:0"][data-caret="0"] > br:only-child').length];
             """)
             #expect(empty == [1, 0, 1], "only the editable caret holder remains")
             #expect(h.doc.buffer.units.isEmpty)
@@ -232,7 +229,7 @@ extension PreviewSuites {
             try h.doc.buffer.apply(Patch(range: at..<at, replacement: Array("xyz".utf16), origin: .command))
             try await h.settle()
             let block = try await h.js("""
-            const kids = [...document.getElementById('doc').children];
+            const kids = [...document.getElementById('doc').children].flatMap(chunk => [...chunk.children]);
             return kids.findIndex(k => k.textContent.includes('xyz'));
             """) as? Int ?? -1
             #expect(block >= 0)

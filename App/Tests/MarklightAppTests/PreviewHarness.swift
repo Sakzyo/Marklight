@@ -135,13 +135,15 @@ private let failOnEarlyExit: Void = {
     }
 
     /// The whole DOM of the document, node by node, with each block's offset. A
-    /// serialized string wouldn't show text split across two nodes.
+    /// serialized string wouldn't show text split across two nodes. Blocks are
+    /// listed flat: which wrapper holds a block depends on the edit history.
     func dom() async throws -> String {
         try await js("""
         const dump = n => n.nodeType === 1
           ? [n.nodeName, [...n.attributes].map(a => [a.name, a.value]).sort(), [...n.childNodes].map(dump)]
           : [n.nodeType, n.nodeValue];
-        return JSON.stringify([...document.getElementById('doc').children].map(el => [el._base, dump(el)]));
+        const blocks = [...document.getElementById('doc').childNodes].flatMap(chunk => chunk.nodeType === 1 ? [...chunk.childNodes] : [chunk]);
+        return JSON.stringify(blocks.map(el => [el._base, dump(el)]));
         """) as? String ?? ""
     }
 
