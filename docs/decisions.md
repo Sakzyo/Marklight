@@ -82,12 +82,21 @@ These came up during M2, and the owner hasn't reviewed them yet.
 - The renderer leaves out `contenteditable` and the empty-leaf `<br>` until M3 needs them, and task checkboxes are `disabled` until M4. Empty leaves keep `data-caret`.
 - `thead` and `tbody` are written explicitly, each with `data-src`. Otherwise the HTML parser would add a `tbody` with none.
 
+## Found while building M3
+
+These came up during M3, and the owner hasn't reviewed them yet. The evidence is in `docs/handoffs/m3-rendered-typing.md`.
+
+- Top-level blocks sit in plain `div` wrappers of 64 under `#doc`, because WebKit's layout and paint loop over an element's direct children, and 15,000 of them cost more per key than everything else. The wrappers belong to the page. `docs/bridge.md` and `docs/contracts.md` didn't change: Swift still sends one entry per top-level block, and a block still holds its own offset. A wrapper has no `_base` and no `data-src`.
+- `#doc` draws no focus ring. WebKit walks every box in the element to draw one, on every paint, and it showed as a line across the page.
+- The `undo` bridge message stays. Menu commands and WebKit history events both go through it, so an undo stays ordered behind typing that hasn't reached Swift yet.
+- Rendered typing can't be measured under `swift test`, because the test process never runs AppKit's event loop and WebKit treats the page as hidden. `TypingBench` measures it on a visible page. It's only part of the package when `MARKLIGHT_BENCH=1` is set, because it needs `@testable`, which a normal release build doesn't allow.
+- Per-block editing hosts were considered and rejected. They would remove the last per-key cost that grows with the file (handoff, "Known limits"), but WebKit won't extend a selection or move a caret across editing hosts, so selecting across blocks would break.
+- `#doc > div > div > :first-child { margin-top: 0; }` is the M2 rule with the new depth. Each block has one child, so it removes the top margin of every block, and the `1.5em` set on headings never applies. It's kept as it was, so the layout stays identical, but it may not be what was meant.
+
 ## Known gaps for milestones
 
 - M2: top-level blocks are sanitized one at a time, so `<details>` or `<div align="center">` wrapping Markdown doesn't wrap it, and the opening tag closes inside its own block.
 - M2: `<a name="x"></a>` on its own line is inline HTML in CommonMark, so it shows as a chip, and a link to it does nothing.
-- M3: every edit re-parses the whole file (Spikes 3 and 4). Incremental parsing is required for large files.
-- M3: editing must run off the main thread (Spike 4).
 - M5: nothing in the rendered pane gets out of a code block at the end of a document (Spike 5 manual test). Needs a design.
 - Before shipping: autosave or recovery, because a Swift trap can't be caught (Spike 3).
 

@@ -1,7 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
-import MarklightCore
+@testable import MarklightCore
 import Testing
 @testable import MarklightApp
 
@@ -57,18 +57,15 @@ return n;
 /// Outside block `skip`: nodes that are new, nodes checked, and DOM changes seen.
 private let countChanges = """
 const root = document.getElementById('doc');
-const inSkipped = node => {
-  let el = node.nodeType === 1 ? node : node.parentElement;
-  while (el && el.parentElement !== root) el = el.parentElement;
-  return el === root.children[skip];
-};
+const blocks = [...root.children].flatMap(chunk => [...chunk.children]);
 let lost = 0, total = 0;
-[...root.children].forEach((block, i) => {
+blocks.forEach((block, i) => {
   if (i === skip) return;
   const walk = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
   while (walk.nextNode()) { total++; if (walk.currentNode._tag === undefined) lost++; }
 });
-const changes = window._changes.takeRecords().filter(r => r.target !== root && !inSkipped(r.target)).length;
+const structural = target => target === root || target.parentNode === root;
+const changes = window._changes.takeRecords().filter(r => !structural(r.target) && !blocks[skip]?.contains(r.target)).length;
 return [lost, total, changes];
 """
 
@@ -157,12 +154,43 @@ extension PreviewSuites {
             try await h.settle()
             try h.doc.buffer.apply(Patch(range: 0..<5, replacement: [], origin: .command))
             try await h.settle()
-            let none = try await h.js("return document.getElementById('doc').children.length") as? Int
-            #expect(none == 0)
+            let empty: [Int] = try await h.json("""
+            const root = document.querySelector('#doc');
+            return [root.childElementCount, root.textContent.length,
+                    root.querySelectorAll(':scope > div > div > p[data-src="0:0"][data-caret="0"] > br:only-child').length];
+            """)
+            #expect(empty == [1, 0, 1], "only the editable caret holder remains")
+            #expect(h.doc.buffer.units.isEmpty)
             try h.doc.buffer.apply(Patch(range: 0..<0, replacement: Array("# Back\n".utf16), origin: .command))
             try await h.settle()
             let back = try await h.js("return document.querySelectorAll('h1').length") as? Int
             #expect(back == 1)
+        }
+
+        @Test("An idle parse disagreement repairs the page from the same buffer version")
+        func idleRepair() async throws {
+            let h = try PreviewHarness(text: "one\n\ntwo")
+            defer { h.close() }
+            try await h.settle()
+            let doc = IncrementalDocument(units: h.doc.buffer.units)
+            let edit = try #require(BlockSerializer.edit(doc, inputType: "insertText", data: "x", selection: 1..<1, target: nil, pending: nil))
+            try #require(!edit.document.usedFullParse)
+            // Inject a wrong cached tree while keeping the exact verified source.
+            edit.document.block(at: 0).isOpaque = true
+            var loads = 0
+            let present = h.pane.updater.present
+            h.pane.updater.present = { update, done in
+                if case .load = update.content { loads += 1 }
+                present(update, done)
+            }
+            try h.doc.buffer.apply(edit.patch)
+            h.pane.updater.accepted(edit)
+            try await h.settle()
+            let version = h.doc.buffer.version
+            try #require(await pump(until: { loads == 1 }, timeout: 4))
+            try await h.settle()
+            #expect(h.doc.buffer.version == version)
+            #expect(try await h.js("return document.querySelector('#doc p [data-run]').textContent") as? String == "oxne")
         }
 
         @Test("A burst of edits is one update")
@@ -201,7 +229,7 @@ extension PreviewSuites {
             try h.doc.buffer.apply(Patch(range: at..<at, replacement: Array("xyz".utf16), origin: .command))
             try await h.settle()
             let block = try await h.js("""
-            const kids = [...document.getElementById('doc').children];
+            const kids = [...document.getElementById('doc').children].flatMap(chunk => [...chunk.children]);
             return kids.findIndex(k => k.textContent.includes('xyz'));
             """) as? Int ?? -1
             #expect(block >= 0)

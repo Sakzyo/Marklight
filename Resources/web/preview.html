@@ -35,8 +35,10 @@ body {
   overflow-wrap: break-word;
 }
 #doc { max-width: 46rem; margin: 0 auto; padding: 24px 28px 48px; }
-#doc > div > :first-child { margin-top: 0; }
-#doc > div:first-child > :first-child { margin-top: 0; }
+/* A ring around a whole document isn't useful, and WebKit walks every box in the
+   editing host to find its edges, on every paint. */
+#doc:focus { outline: none; }
+#doc > div > div > :first-child { margin-top: 0; }
 p, ul, ol, blockquote, pre, table, hr { margin: 0 0 1em; }
 h1, h2, h3, h4, h5, h6 { margin: 1.5em 0 0.6em; font-weight: 600; line-height: 1.25; }
 h1 { font-size: 1.9em; padding-bottom: 0.25em; border-bottom: 1px solid var(--border); }
@@ -69,5 +71,5 @@ img { max-width: 100%; }
 ::selection { background: rgba(9, 105, 218, 0.25); }
 </style>
 </head>
-<body><main id="doc"></main></body>
+<body><main id="doc" contenteditable="true" spellcheck="false" autocorrect="off" autocapitalize="off" writingsuggestions="false"></main></body>
 </html>

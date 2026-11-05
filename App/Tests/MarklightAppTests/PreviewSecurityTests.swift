@@ -65,7 +65,8 @@ return {
   handlers: all.flatMap(e => [...e.attributes].filter(a => a.name.startsWith('on')).map(a => e.tagName + '[' + a.name + ']')),
   scriptLinks: [...doc.querySelectorAll('a')].filter(a => /^\\s*(javascript|data):/i.test(a.getAttribute('href') || '')).map(a => a.textContent),
   forgedOffsets: doc.querySelectorAll('[data-raw] [data-src], [data-raw] [data-run], [data-raw] [data-caret]').length,
-  forgedEditable: doc.querySelectorAll('[contenteditable]').length,
+  forgedEditable: all.filter(el => el.closest('[data-raw]') && (el.isContentEditable ||
+    (!el.hasAttribute('data-raw') && el.hasAttribute('contenteditable')))).length,
 };
 """
 
@@ -255,12 +256,23 @@ extension PreviewSuites {
             try await h.settle()
             let start = h.webView.url
 
+            _ = try await h.js("""
+            window.linkClicks = [];
+            document.addEventListener('click', e => linkClicks.push([e.target.closest('a')?.textContent, e.metaKey]), true);
+            """)
             for text in ["markdown js link", "attribute breakout", "external link", "mail link", "other markdown file",
                          "raw js link", "raw data link", "raw blank link", "raw markdown link", "missing markdown link", "text file link"] {
+                let oldCount = markdown.count
                 let point = try await h.center(of: "a", text: text)
                 await pump(for: 0.1)
-                await h.click(x: point.x, y: point.y)
-                await pump(for: 0.15)
+                await h.click(x: point.x, y: point.y, modifiers: .command)
+                if text == "other markdown file" || text == "raw markdown link" {
+                    let routed = await pump(until: { markdown.count > oldCount }, timeout: 2)
+                    let clicks = try await h.js("return JSON.stringify(linkClicks)") as? String ?? ""
+                    #expect(routed && markdown.dropFirst(oldCount) == ["other.md"], "\(text), clicks \(clicks)")
+                } else {
+                    await pump(for: 0.15)
+                }
                 #expect(h.webView.url == start, "\(text) navigated the preview")
             }
 
@@ -270,7 +282,7 @@ extension PreviewSuites {
             #expect(title?.isEmpty == true)
         }
 
-        @Test("Cmd-clicks get the same routing")
+        @Test("Plain clicks place the caret and Cmd-click follows the link")
         func commandClick() async throws {
             let h = try PreviewHarness(text: "[external](https://example.com/page)\n")
             defer { h.close() }
@@ -280,6 +292,11 @@ extension PreviewSuites {
             let point = try await h.center(of: "a")
             await pump(for: 0.1)
             let start = h.webView.url
+            await h.click(x: point.x, y: point.y)
+            await pump(for: 0.2)
+            #expect(external.isEmpty)
+            let range: [Int] = try await h.json("return marklight.selection()")
+            #expect(range.count == 2 && range[0] == range[1] && (1...9).contains(range[0]))
             await h.click(x: point.x, y: point.y, modifiers: .command)
             await pump(for: 0.3)
             #expect(external == ["https://example.com/page"])

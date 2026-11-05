@@ -74,11 +74,11 @@ private let failOnEarlyExit: Void = {
     var window: NSWindow { controller.window! }
 
     init(url: URL, layout: PaneLayout = .split, size: NSSize = NSSize(width: 1000, height: 700),
-         defences: PreviewDefences = PreviewDefences()) throws {
+         defences: PreviewDefences = PreviewDefences(), windowClass: NSWindow.Type = NSWindow.self) throws {
         _ = NSApplication.shared
         _ = failOnEarlyExit
         doc = try MarkdownDocument(contentsOf: url, ofType: MarkdownDocument.markdownType)
-        controller = EditorWindowController(document: doc, layout: layout, defences: defences)
+        controller = EditorWindowController(document: doc, layout: layout, defences: defences, windowClass: windowClass)
         doc.addWindowController(controller)
         openHarnesses += 1
         controller.window!.alphaValue = 0
@@ -87,11 +87,12 @@ private let failOnEarlyExit: Void = {
         controller.setLayout(layout)
     }
 
-    convenience init(text: String, name: String = "doc.md", layout: PaneLayout = .split, size: NSSize = NSSize(width: 1000, height: 700)) throws {
+    convenience init(text: String, name: String = "doc.md", layout: PaneLayout = .split, size: NSSize = NSSize(width: 1000, height: 700),
+                     windowClass: NSWindow.Type = NSWindow.self) throws {
         let folder = try makeTemporaryFolder()
         let url = folder.appendingPathComponent(name)
         try Data(text.utf8).write(to: url)
-        try self.init(url: url, layout: layout, size: size)
+        try self.init(url: url, layout: layout, size: size, windowClass: windowClass)
     }
 
     func close() {
@@ -134,13 +135,15 @@ private let failOnEarlyExit: Void = {
     }
 
     /// The whole DOM of the document, node by node, with each block's offset. A
-    /// serialized string wouldn't show text split across two nodes.
+    /// serialized string wouldn't show text split across two nodes. Blocks are
+    /// listed flat: which wrapper holds a block depends on the edit history.
     func dom() async throws -> String {
         try await js("""
         const dump = n => n.nodeType === 1
           ? [n.nodeName, [...n.attributes].map(a => [a.name, a.value]).sort(), [...n.childNodes].map(dump)]
           : [n.nodeType, n.nodeValue];
-        return JSON.stringify([...document.getElementById('doc').children].map(el => [el._base, dump(el)]));
+        const blocks = [...document.getElementById('doc').childNodes].flatMap(chunk => chunk.nodeType === 1 ? [...chunk.childNodes] : [chunk]);
+        return JSON.stringify(blocks.map(el => [el._base, dump(el)]));
         """) as? String ?? ""
     }
 

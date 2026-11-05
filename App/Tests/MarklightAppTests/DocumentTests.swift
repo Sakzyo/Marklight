@@ -92,6 +92,16 @@ struct DocumentTests {
         #expect(try sha256(url) == before)
     }
 
+    @Test("A source patch delivered outside the text view can be undone safely")
+    func externalSourcePatch() throws {
+        let (doc, view, editor) = try open(file("", makeFolder()))
+        try doc.buffer.apply(Patch(range: 0..<0, replacement: [120], origin: .source))
+        #expect(view.string == "x")
+        editor.undo()
+        #expect(view.string.isEmpty && doc.buffer.units.isEmpty)
+        #expect(!doc.buffer.isDirty)
+    }
+
     @Test func typingChangesOnlyTheTypedBytes() async throws {
         let url = try file("one\n\ntwo\n", try makeFolder())
         let (doc, view, _) = try open(url)
